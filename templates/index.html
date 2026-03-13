@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ModelCraft Studio</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section id="homeHero" class="hero card-base" aria-label="Welcome">
+        <div class="hero-content">
+          <img
+            src="/static/download.jpg"
+            alt="Ezofis logo"
+            class="hero-logo"
+          />
+          <h1 class="hero-title">Ezofis's ModelCraft Studio</h1>
+          <p class="hero-subtitle">
+            Test, compare, and fine-tune your AI models in one place.
+          </p>
+          <button class="btn-primary hero-button" type="button" id="getStartedBtn">
+            Get started
+          </button>
+        </div>
+        <div class="hero-visual">
+          <div class="hero-orbit hero-orbit--primary"></div>
+          <div class="hero-orbit hero-orbit--secondary"></div>
+          <div class="hero-card">
+            <div class="hero-card__pill">Model testing · Tuning</div>
+            <div class="hero-card__title">Start with your first model</div>
+            <div class="hero-card__line">Plug in any vision or text model.</div>
+            <div class="hero-card__line">Run quick OCR and JSON checks.</div>
+            <div class="hero-card__line">Compare outputs side by side.</div>
+          </div>
+        </div>
+      </section>
+
+      <div id="modelPage" class="model-page">
+        <header class="header">
+          <div class="header__text">
+            <div class="page-title">ModelCraft Studio</div>
+            <div class="subtitle">
+              Current focus: Qwen3-VL-8B-Thinking model card.
+            </div>
+          </div>
+        </header>
+
+        <section class="section" aria-label="Model">
+          <article class="card-base model-card">
+          <div class="model-card__top">
+            <div class="model-card__title-wrap">
+              <div class="model-card__name">Qwen3-VL-8B-Thinking</div>
+              <div class="caption">Reasoning‑enhanced vision-language model from Qwen.</div>
+            </div>
+            <div class="model-card__actions">
+              <button
+                class="btn-secondary"
+                type="button"
+                id="viewDetailsBtn"
+              >
+                <span class="btn-label">View more details</span>
+              </button>
+
+              <button
+                class="btn-primary"
+                type="button"
+                id="wannaTryBtn"
+              >
+                <span class="btn-label">Wanna try</span>
+              </button>
+            </div>
+          </div>
+
+          <p class="body model-card__desc">
+            Powerful image‑text model for deep OCR, document understanding, and multimodal reasoning.
+          </p>
+        </article>
+
+        <section class="expansion card-base" id="carDetails" aria-label="Model details">
+          <div class="details-grid">
+            <section class="details-block">
+              <div class="details-block__title">Summary</div>
+              <p class="body details-block__body">
+                Qwen3‑VL‑8B‑Thinking is a reasoning‑enhanced vision‑language model for rich OCR,
+                document understanding, and multimodal reasoning over images, screenshots, and PDFs.
+              </p>
+            </section>
+
+            <section class="details-block">
+              <div class="details-block__title">Key facts</div>
+              <div class="kv">
+                <div class="kv__row">
+                  <div class="kv__k caption">Size</div>
+                  <div class="kv__v body">~9B parameters (Thinking variant)</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k caption">Developed</div>
+                  <div class="kv__v body">Qwen Team, around 2025</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k caption">Family</div>
+                  <div class="kv__v body">Qwen3‑VL series (Dense &amp; MoE)</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k caption">Trained params</div>
+                  <div class="kv__v body">Reasoning‑enhanced on top of Qwen3‑VL‑8B‑Instruct</div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="expansion card-base" id="tryActions" aria-label="Try actions">
+          <div class="details-grid">
+            <section class="details-block details-block--try">
+              <div class="details-block__title">So far you can:</div>
+
+              <div class="try-layout">
+                <div class="try-layout__sidebar">
+                  <button class="btn-primary try-option" type="button" id="ocrActionBtn">
+                    OCR (read text from PDFs)
+                  </button>
+                  <button class="btn-secondary try-option" type="button" id="textToJsonBtn">
+                    Text → JSON extraction
+                  </button>
+                </div>
+
+                <div class="try-layout__main" id="tryMain">
+                  <form class="ocr-form" id="ocrForm">
+                    <div class="ocr-form__row">
+                      <label class="caption" for="ocrFile">PDF file</label>
+                      <input id="ocrFile" name="file" type="file" accept=".pdf" required />
+                    </div>
+                    <div class="ocr-form__row">
+                      <label class="caption" for="ocrPrompt">Prompt</label>
+                      <input
+                        id="ocrPrompt"
+                        name="prompt"
+                        type="text"
+                        required
+                        placeholder="Extract all text"
+                      />
+                    </div>
+                    <div class="ocr-form__row">
+                      <label class="caption" for="ocrModalUrl">Model URL (Modal)</label>
+                      <input
+                        id="ocrModalUrl"
+                        name="modal_url"
+                        type="url"
+                        required
+                        placeholder="https://your-model.modal.run"
+                      />
+                    </div>
+                    <button class="btn-primary" type="submit">
+                      Run OCR
+                    </button>
+                  </form>
+
+                  <div class="ocr-result caption" id="ocrResult" aria-live="polite"></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script src="/static/script.js"></script>
+  </body>
+</html>
