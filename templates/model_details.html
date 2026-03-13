@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ model.name }} — ModelCraft Studio</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body class="is-ready">
+    <main class="page">
+      <header class="header details-page-header">
+        <a href="/?view=models" class="details-back-btn" aria-label="Back to models">
+          ← Back to models
+        </a>
+        <div class="header__text" style="margin-top: 12px;">
+          <div class="page-title">{{ model.name }}</div>
+          <div class="subtitle">{{ model.subtitle }}</div>
+        </div>
+      </header>
+
+      <section class="section" aria-label="Model details">
+        <div class="details-grid details-grid--single">
+          <section class="details-block">
+            <div class="details-block__title">{{ model.name }} — Summary</div>
+            <p class="body details-block__body">{{ model.summary }}</p>
+          </section>
+          <section class="details-block">
+            <div class="details-block__title">{{ model.name }} — Key facts</div>
+            <div class="kv">
+              {% for k, v in model.key_facts %}
+              <div class="kv__row">
+                <div class="kv__k caption">{{ k }}</div>
+                <div class="kv__v body">{{ v }}</div>
+              </div>
+              {% endfor %}
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

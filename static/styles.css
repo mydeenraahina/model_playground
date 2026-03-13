@@ -244,6 +244,12 @@ body.is-ready {
   gap: 16px;
 }
 
+.model-cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
 .section__head {
   display: flex;
   flex-direction: column;
@@ -282,11 +288,10 @@ body.is-ready {
 }
 
 .model-card__actions {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .model-card__name {
@@ -379,6 +384,10 @@ body.is-ready {
   background: transparent;
   color: var(--primary);
   border-color: var(--primary);
+}
+
+a.btn-secondary {
+  text-decoration: none;
 }
 
 .btn-secondary:active {
@@ -478,6 +487,12 @@ body.is-ready {
 
 .details-block--try {
   padding: 20px;
+  padding-bottom: 24px;
+  overflow: visible;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .details-block__title {
@@ -570,15 +585,27 @@ body.is-ready {
 .ocr-form__row {
   display: grid;
   gap: 4px;
+  width: 100%;
 }
 
 .ocr-form input[type='file'],
 .ocr-form input[type='text'],
-.ocr-form input[type='url'] {
+.ocr-form input[type='url'],
+.ocr-form textarea {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color);
   font-family: var(--font-main);
+  font-size: 13px;
+}
+
+.ocr-form textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.summarize-file-input {
+  margin-bottom: 8px;
   font-size: 13px;
 }
 
@@ -588,10 +615,247 @@ body.is-ready {
   border-radius: var(--radius-sm);
   border: 1px dashed var(--border-color);
   background: var(--gray-2);
-  max-height: 220px;
+  min-height: 120px;
+  max-height: 60vh;
   overflow-y: auto;
   white-space: pre-wrap;
 }
+
+/* Try: 2x2 choice grid */
+.try-choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 12px;
+  width: 100%;
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.try-choice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-color);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  text-align: center;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  font-family: var(--font-main);
+}
+
+.try-choice-card:hover {
+  box-shadow: var(--shadow-sm), var(--focus-ring);
+  transform: translateY(-2px);
+  border-color: var(--primary);
+}
+
+.try-choice-card--placeholder {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.try-choice-card--placeholder:hover {
+  transform: none;
+  border-color: var(--border-color);
+}
+
+.try-choice-card__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gray-13);
+}
+
+.try-choice-card__desc {
+  font-size: 13px;
+  color: var(--gray-10);
+  line-height: 1.4;
+}
+
+/* Try: OCR screen (form left, info cards right) */
+.try-ocr-screen {
+  margin-top: 12px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Ensure any element marked as hidden is not displayed,
+   so OCR / JSON / Summarization / Classification screens
+   only appear after a card is clicked. */
+[hidden] {
+  display: none !important;
+}
+
+.try-screen-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  width: 100%;
+  max-width: 900px;
+  margin-bottom: 12px;
+}
+
+.try-back-btn,
+.details-back-btn {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 8px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--primary);
+  cursor: pointer;
+  font-family: var(--font-main);
+  text-decoration: none;
+  display: inline-block;
+}
+
+.try-back-btn:hover,
+.details-back-btn:hover {
+  text-decoration: underline;
+}
+
+.details-grid--single {
+  grid-template-columns: 1fr;
+  max-width: 640px;
+}
+
+.try-content-wrap {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.details-block--try .try-back-btn {
+  margin-bottom: 12px;
+  display: block;
+  width: fit-content;
+  align-self: flex-start;
+}
+
+.try-switch-btn {
+  appearance: none;
+  border: 1px solid var(--primary);
+  background: transparent;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--primary);
+  cursor: pointer;
+  font-family: var(--font-main);
+}
+
+.try-switch-btn:hover {
+  background: var(--gray-2);
+  text-decoration: none;
+}
+
+.try-ocr-layout {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+  max-width: 900px;
+}
+
+.try-ocr-left {
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.try-ocr-left .ocr-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+  width: 100%;
+  max-width: 320px;
+}
+
+.try-ocr-left .ocr-form__row {
+  text-align: left;
+}
+
+.try-submit-btn {
+  margin-top: 8px;
+  min-height: 44px;
+  align-self: flex-start;
+}
+
+.try-ocr-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 260px;
+  max-width: 320px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  align-items: stretch;
+}
+
+.try-ocr-right .ocr-result {
+  min-height: 120px;
+  max-height: 60vh;
+  flex: 1;
+}
+
+.try-info-card {
+  padding: 16px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-color);
+  background: var(--gray-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: center;
+  align-items: center;
+  font-family: var(--font-main);
+}
+
+.try-info-card--pressable {
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  appearance: none;
+}
+
+.try-info-card--pressable:hover {
+  box-shadow: var(--shadow-sm), var(--focus-ring);
+  transform: translateY(-2px);
+  border-color: var(--primary);
+}
+
+.try-info-card--pressable:active {
+  transform: translateY(0);
+}
+
+.try-info-card__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-13);
+}
+
+.try-info-card__desc {
+  font-size: 12px;
+  color: var(--gray-10);
+  line-height: 1.4;
+}
+
 
 .try-layout {
   display: grid;
@@ -734,6 +998,10 @@ body.is-ready {
 @media (min-width: 720px) {
   .page {
     padding: 16px;
+  }
+
+  .model-cards {
+    grid-template-columns: 1fr;
   }
 
   .hero {

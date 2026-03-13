@@ -49,124 +49,431 @@
           <div class="header__text">
             <div class="page-title">ModelCraft Studio</div>
             <div class="subtitle">
-              Current focus: Qwen3-VL-8B-Thinking model card.
+              Test and compare vision-language models.
             </div>
           </div>
         </header>
 
-        <section class="section" aria-label="Model">
-          <article class="card-base model-card">
-          <div class="model-card__top">
-            <div class="model-card__title-wrap">
-              <div class="model-card__name">Qwen3-VL-8B-Thinking</div>
-              <div class="caption">Reasoning‑enhanced vision-language model from Qwen.</div>
-            </div>
-            <div class="model-card__actions">
-              <button
-                class="btn-secondary"
-                type="button"
-                id="viewDetailsBtn"
-              >
-                <span class="btn-label">View more details</span>
-              </button>
-
-              <button
-                class="btn-primary"
-                type="button"
-                id="wannaTryBtn"
-              >
-                <span class="btn-label">Wanna try</span>
-              </button>
-            </div>
-          </div>
-
-          <p class="body model-card__desc">
-            Powerful image‑text model for deep OCR, document understanding, and multimodal reasoning.
-          </p>
-        </article>
-
-        <section class="expansion card-base" id="carDetails" aria-label="Model details">
-          <div class="details-grid">
-            <section class="details-block">
-              <div class="details-block__title">Summary</div>
-              <p class="body details-block__body">
-                Qwen3‑VL‑8B‑Thinking is a reasoning‑enhanced vision‑language model for rich OCR,
-                document understanding, and multimodal reasoning over images, screenshots, and PDFs.
-              </p>
-            </section>
-
-            <section class="details-block">
-              <div class="details-block__title">Key facts</div>
-              <div class="kv">
-                <div class="kv__row">
-                  <div class="kv__k caption">Size</div>
-                  <div class="kv__v body">~9B parameters (Thinking variant)</div>
+        <section class="section" aria-label="Models">
+          <div class="model-cards">
+            <article class="card-base model-card" data-model="ezofis">
+              <div class="model-card__top">
+                <div class="model-card__title-wrap">
+                  <div class="model-card__name">EZOFIS-VL-8B-Instruct</div>
+                  <div class="caption">Vision-language instruct model from Ezofis.</div>
                 </div>
-                <div class="kv__row">
-                  <div class="kv__k caption">Developed</div>
-                  <div class="kv__v body">Qwen Team, around 2025</div>
-                </div>
-                <div class="kv__row">
-                  <div class="kv__k caption">Family</div>
-                  <div class="kv__v body">Qwen3‑VL series (Dense &amp; MoE)</div>
-                </div>
-                <div class="kv__row">
-                  <div class="kv__k caption">Trained params</div>
-                  <div class="kv__v body">Reasoning‑enhanced on top of Qwen3‑VL‑8B‑Instruct</div>
+                <div class="model-card__actions">
+                  <a href="/model/ezofis" class="btn-secondary" aria-label="View details">View more details</a>
+                  <button class="btn-primary wanna-try-btn" type="button" aria-label="Wanna try">
+                    <span class="btn-label">Wanna try</span>
+                  </button>
                 </div>
               </div>
-            </section>
+              <p class="body model-card__desc">
+                Powerful image‑text model for deep OCR, document understanding, and multimodal reasoning.
+              </p>
+            </article>
+            <article class="card-base model-card" data-model="qwen">
+              <div class="model-card__top">
+                <div class="model-card__title-wrap">
+                  <div class="model-card__name">Qwen‑3‑VL‑8B‑Thinking</div>
+                  <div class="caption">Vision-language model with chain-of-thought reasoning from Alibaba.</div>
+                </div>
+                <div class="model-card__actions">
+                  <a href="/model/qwen" class="btn-secondary" aria-label="View details">View more details</a>
+                  <button class="btn-primary wanna-try-btn" type="button" aria-label="Wanna try">
+                    <span class="btn-label">Wanna try</span>
+                  </button>
+                </div>
+              </div>
+              <p class="body model-card__desc">
+                Advanced reasoning capabilities for OCR, document understanding, and structured analysis with step-by-step thinking.
+              </p>
+            </article>
           </div>
-        </section>
 
         <section class="expansion card-base" id="tryActions" aria-label="Try actions">
           <div class="details-grid">
             <section class="details-block details-block--try">
-              <div class="details-block__title">So far you can:</div>
+              <div class="try-content-wrap">
+              <button type="button" class="try-back-btn" id="tryBackBtn" aria-label="Back to model">
+                ← Back to model
+              </button>
+              <!-- Step 1: Choice grid (2x2) - shown when "Wanna try" is opened -->
+              <div class="try-choice-grid" id="tryChoiceGrid">
+                <button type="button" class="try-choice-card" id="ocrChoiceCard" aria-label="OCR">
+                  <span class="try-choice-card__title">OCR</span>
+                  <span class="try-choice-card__desc">You can upload your docs and get the OCR text of it.</span>
+                </button>
+                <button type="button" class="try-choice-card" id="textToJsonChoiceCard" aria-label="Text to JSON">
+                  <span class="try-choice-card__title">Text to JSON</span>
+                  <span class="try-choice-card__desc">You can convert the text to JSON here.</span>
+                </button>
+                <button type="button" class="try-choice-card" id="summarizeChoiceCard" aria-label="Document Summarization">
+                  <span class="try-choice-card__title">Document Summarization</span>
+                  <span class="try-choice-card__desc">Summarize documents with a custom prompt and model URL.</span>
+                </button>
+                <button type="button" class="try-choice-card" id="classifyChoiceCard" aria-label="Document Classification">
+                  <span class="try-choice-card__title">Document Classification</span>
+                  <span class="try-choice-card__desc">Classify document type with a custom prompt and model URL.</span>
+                </button>
+              </div>
 
-              <div class="try-layout">
-                <div class="try-layout__sidebar">
-                  <button class="btn-primary try-option" type="button" id="ocrActionBtn">
-                    OCR (read text from PDFs)
-                  </button>
-                  <button class="btn-secondary try-option" type="button" id="textToJsonBtn">
-                    Text → JSON extraction
-                  </button>
-                </div>
-
-                <div class="try-layout__main" id="tryMain">
-                  <form class="ocr-form" id="ocrForm">
-                    <div class="ocr-form__row">
-                      <label class="caption" for="ocrFile">PDF file</label>
-                      <input id="ocrFile" name="file" type="file" accept=".pdf" required />
-                    </div>
-                    <div class="ocr-form__row">
-                      <label class="caption" for="ocrPrompt">Prompt</label>
-                      <input
-                        id="ocrPrompt"
-                        name="prompt"
-                        type="text"
-                        required
-                        placeholder="Extract all text"
-                      />
-                    </div>
-                    <div class="ocr-form__row">
-                      <label class="caption" for="ocrModalUrl">Model URL (Modal)</label>
-                      <input
-                        id="ocrModalUrl"
-                        name="modal_url"
-                        type="url"
-                        required
-                        placeholder="https://your-model.modal.run"
-                      />
-                    </div>
-                    <button class="btn-primary" type="submit">
-                      Run OCR
+              <!-- Step 2a: OCR screen - form left, buttons + result right (no extra blank space) -->
+              <div class="try-ocr-screen" id="tryOcrScreen" hidden>
+                <div class="try-ocr-layout" id="tryMain">
+                  <div class="try-ocr-left">
+                    <form class="ocr-form" id="ocrForm">
+                      <div class="ocr-form__row">
+                        <label class="caption" for="ocrFile">PDF file</label>
+                        <input id="ocrFile" name="file" type="file" accept=".pdf" required />
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="ocrPrompt">Prompt</label>
+                        <input
+                          id="ocrPrompt"
+                          name="prompt"
+                          type="text"
+                          required
+                          placeholder="Extract all text"
+                        />
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="ocrModalUrl">Model URL (Modal)</label>
+                        <input
+                          id="ocrModalUrl"
+                          name="modal_url"
+                          type="url"
+                          required
+                          placeholder="https://your-model.modal.run"
+                        />
+                      </div>
+                      <button class="btn-primary try-submit-btn" type="submit">
+                        Run OCR
+                      </button>
+                    </form>
+                  </div>
+                  <div class="try-ocr-right">
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      id="ocrInfoCard"
+                      data-action="ocr"
+                      aria-label="OCR"
+                    >
+                      <span class="try-info-card__title">OCR</span>
+                      <span class="try-info-card__desc">
+                        You can upload your docs and get the OCR text of it.
+                      </span>
                     </button>
-                  </form>
 
-                  <div class="ocr-result caption" id="ocrResult" aria-live="polite"></div>
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      id="textToJsonInfoCard"
+                      data-action="json"
+                      aria-label="Text to JSON"
+                    >
+                      <span class="try-info-card__title">Text to JSON</span>
+                      <span class="try-info-card__desc">
+                        You can convert the text to JSON here.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      id="summarizeInfoCard"
+                      data-action="summarize"
+                      aria-label="Document Summarization"
+                    >
+                      <span class="try-info-card__title">Document summarization</span>
+                      <span class="try-info-card__desc">
+                        Quickly summarize your document content.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      id="classifyInfoCard"
+                      data-action="classify"
+                      aria-label="Document Classification"
+                    >
+                      <span class="try-info-card__title">Document classification</span>
+                      <span class="try-info-card__desc">
+                        Detect the document type in one click.
+                      </span>
+                    </button>
+
+                    <div class="ocr-result caption" id="ocrResult" aria-live="polite"></div>
+                  </div>
                 </div>
+              </div>
+
+              <!-- Step 2b: Text to JSON screen - form left, info + result right -->
+              <div class="try-ocr-screen" id="tryJsonScreen" hidden>
+                <div class="try-ocr-layout">
+                  <div class="try-ocr-left">
+                    <form class="ocr-form json-form" id="jsonForm">
+                      <div class="ocr-form__row">
+                        <label class="caption" for="jsonText">Text</label>
+                        <textarea id="jsonText" name="text" rows="4" required placeholder="Paste text to convert to JSON..."></textarea>
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="jsonPrompt">Prompt</label>
+                        <input
+                          id="jsonPrompt"
+                          name="prompt"
+                          type="text"
+                          required
+                          placeholder="e.g. Extract name, date, amount as JSON"
+                        />
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="jsonModalUrl">Model URL (Modal)</label>
+                        <input
+                          id="jsonModalUrl"
+                          name="modal_url"
+                          type="url"
+                          required
+                          placeholder="https://your-model.modal.run"
+                        />
+                      </div>
+                      <button class="btn-primary try-submit-btn" type="submit">
+                        Extract JSON
+                      </button>
+                    </form>
+                  </div>
+                  <div class="try-ocr-right">
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="ocr"
+                      aria-label="OCR"
+                    >
+                      <span class="try-info-card__title">OCR</span>
+                      <span class="try-info-card__desc">
+                        You can upload your docs and get the OCR text of it.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="json"
+                      aria-label="Text to JSON"
+                    >
+                      <span class="try-info-card__title">Text to JSON</span>
+                      <span class="try-info-card__desc">
+                        You can convert the text to JSON here.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="summarize"
+                      aria-label="Document Summarization"
+                    >
+                      <span class="try-info-card__title">Document summarization</span>
+                      <span class="try-info-card__desc">
+                        Quickly summarize your document content.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="classify"
+                      aria-label="Document Classification"
+                    >
+                      <span class="try-info-card__title">Document classification</span>
+                      <span class="try-info-card__desc">
+                        Detect the document type in one click.
+                      </span>
+                    </button>
+
+                    <div class="ocr-result caption" id="jsonResult" aria-live="polite"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Step 2c: Document Summarization screen -->
+              <div class="try-ocr-screen" id="trySummarizeScreen" hidden>
+                <div class="try-ocr-layout">
+                  <div class="try-ocr-left">
+                    <form class="ocr-form summarize-form" id="summarizeForm">
+                      <div class="ocr-form__row">
+                        <label class="caption" for="summarizeDoc">Document (paste text or upload .txt)</label>
+                        <input type="file" id="summarizeFile" accept=".txt" class="summarize-file-input" />
+                        <textarea id="summarizeDoc" name="text" rows="4" required placeholder="Paste document text here..."></textarea>
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="summarizePrompt">Prompt (optional)</label>
+                        <input
+                          id="summarizePrompt"
+                          name="prompt"
+                          type="text"
+                          placeholder="Summarize the following document clearly and concisely."
+                        />
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="summarizeModalUrl">Model URL (Modal)</label>
+                        <input
+                          id="summarizeModalUrl"
+                          name="modal_url"
+                          type="url"
+                          required
+                          placeholder="https://your-model.modal.run"
+                        />
+                      </div>
+                      <button class="btn-primary try-submit-btn" type="submit">
+                        Summarize
+                      </button>
+                    </form>
+                  </div>
+                  <div class="try-ocr-right">
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="ocr"
+                      aria-label="OCR"
+                    >
+                      <span class="try-info-card__title">OCR</span>
+                      <span class="try-info-card__desc">
+                        You can upload your docs and get the OCR text of it.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="json"
+                      aria-label="Text to JSON"
+                    >
+                      <span class="try-info-card__title">Text to JSON</span>
+                      <span class="try-info-card__desc">
+                        You can convert the text to JSON here.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="summarize"
+                      aria-label="Document Summarization"
+                    >
+                      <span class="try-info-card__title">Document summarization</span>
+                      <span class="try-info-card__desc">
+                        Quickly summarize your document content.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="classify"
+                      aria-label="Document Classification"
+                    >
+                      <span class="try-info-card__title">Document classification</span>
+                      <span class="try-info-card__desc">
+                        Detect the document type in one click.
+                      </span>
+                    </button>
+
+                    <div class="ocr-result caption" id="summarizeResult" aria-live="polite"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Step 2d: Document Classification screen -->
+              <div class="try-ocr-screen" id="tryClassifyScreen" hidden>
+                <div class="try-ocr-layout">
+                  <div class="try-ocr-left">
+                    <form class="ocr-form classify-form" id="classifyForm">
+                      <div class="ocr-form__row">
+                        <label class="caption" for="classifyDoc">Document (paste text or upload .txt)</label>
+                        <input type="file" id="classifyFile" accept=".txt" class="summarize-file-input" />
+                        <textarea id="classifyDoc" name="text" rows="4" required placeholder="Paste document text here..."></textarea>
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="classifyPrompt">Prompt (optional)</label>
+                        <input
+                          id="classifyPrompt"
+                          name="prompt"
+                          type="text"
+                          placeholder="Classify the type of document and return only the document type."
+                        />
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="classifyModalUrl">Model URL (Modal)</label>
+                        <input
+                          id="classifyModalUrl"
+                          name="modal_url"
+                          type="url"
+                          required
+                          placeholder="https://your-model.modal.run"
+                        />
+                      </div>
+                      <button class="btn-primary try-submit-btn" type="submit">
+                        Classify
+                      </button>
+                    </form>
+                  </div>
+                  <div class="try-ocr-right">
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="ocr"
+                      aria-label="OCR"
+                    >
+                      <span class="try-info-card__title">OCR</span>
+                      <span class="try-info-card__desc">
+                        You can upload your docs and get the OCR text of it.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="json"
+                      aria-label="Text to JSON"
+                    >
+                      <span class="try-info-card__title">Text to JSON</span>
+                      <span class="try-info-card__desc">
+                        You can convert the text to JSON here.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="summarize"
+                      aria-label="Document Summarization"
+                    >
+                      <span class="try-info-card__title">Document summarization</span>
+                      <span class="try-info-card__desc">
+                        Quickly summarize your document content.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="try-info-card try-info-card--pressable"
+                      data-action="classify"
+                      aria-label="Document Classification"
+                    >
+                      <span class="try-info-card__title">Document classification</span>
+                      <span class="try-info-card__desc">
+                        Detect the document type in one click.
+                      </span>
+                    </button>
+
+                    <div class="ocr-result caption" id="classifyResult" aria-live="polite"></div>
+                  </div>
+                </div>
+              </div>
               </div>
             </section>
           </div>
