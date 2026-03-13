@@ -125,6 +125,13 @@
                   <div class="try-ocr-left">
                     <form class="ocr-form" id="ocrForm">
                       <div class="ocr-form__row">
+                        <label class="caption" for="ocrModel">Model</label>
+                        <select id="ocrModel" name="model">
+                          <option value="ezofis">EZOFIS-VL-8B-Instruct (vision OCR)</option>
+                          <option value="qwen">Qwen-3-VL-8B-Thinking (text + vLLM)</option>
+                        </select>
+                      </div>
+                      <div class="ocr-form__row">
                         <label class="caption" for="ocrFile">PDF file</label>
                         <input id="ocrFile" name="file" type="file" accept=".pdf" required />
                       </div>
@@ -217,8 +224,19 @@
                   <div class="try-ocr-left">
                     <form class="ocr-form json-form" id="jsonForm">
                       <div class="ocr-form__row">
+                        <label class="caption" for="jsonModel">Model</label>
+                        <select id="jsonModel" name="model">
+                          <option value="ezofis">EZOFIS-VL-8B-Instruct</option>
+                          <option value="qwen">Qwen-3-VL-8B-Thinking</option>
+                        </select>
+                      </div>
+                      <div class="ocr-form__row" id="jsonPdfRow">
+                        <label class="caption" for="jsonPdfFile">PDF file (Qwen only, optional)</label>
+                        <input id="jsonPdfFile" name="file" type="file" accept=".pdf" />
+                      </div>
+                      <div class="ocr-form__row">
                         <label class="caption" for="jsonText">Text</label>
-                        <textarea id="jsonText" name="text" rows="4" required placeholder="Paste text to convert to JSON..."></textarea>
+                        <textarea id="jsonText" name="text" rows="4" placeholder="Paste text to convert to JSON, or upload PDF above (Qwen)"></textarea>
                       </div>
                       <div class="ocr-form__row">
                         <label class="caption" for="jsonPrompt">Prompt</label>
@@ -305,9 +323,20 @@
                   <div class="try-ocr-left">
                     <form class="ocr-form summarize-form" id="summarizeForm">
                       <div class="ocr-form__row">
+                        <label class="caption" for="summarizeModel">Model</label>
+                        <select id="summarizeModel" name="model">
+                          <option value="ezofis">EZOFIS-VL-8B-Instruct</option>
+                          <option value="qwen">Qwen-3-VL-8B-Thinking</option>
+                        </select>
+                      </div>
+                      <div class="ocr-form__row" id="summarizePdfRow">
+                        <label class="caption" for="summarizePdfFile">PDF file (Qwen only, optional)</label>
+                        <input type="file" id="summarizePdfFile" accept=".pdf" class="summarize-file-input" />
+                      </div>
+                      <div class="ocr-form__row">
                         <label class="caption" for="summarizeDoc">Document (paste text or upload .txt)</label>
                         <input type="file" id="summarizeFile" accept=".txt" class="summarize-file-input" />
-                        <textarea id="summarizeDoc" name="text" rows="4" required placeholder="Paste document text here..."></textarea>
+                        <textarea id="summarizeDoc" name="text" rows="4" placeholder="Paste document text here, or upload PDF above (Qwen)"></textarea>
                       </div>
                       <div class="ocr-form__row">
                         <label class="caption" for="summarizePrompt">Prompt (optional)</label>
@@ -393,9 +422,20 @@
                   <div class="try-ocr-left">
                     <form class="ocr-form classify-form" id="classifyForm">
                       <div class="ocr-form__row">
+                        <label class="caption" for="classifyModel">Model</label>
+                        <select id="classifyModel" name="model">
+                          <option value="ezofis">EZOFIS-VL-8B-Instruct</option>
+                          <option value="qwen">Qwen-3-VL-8B-Thinking</option>
+                        </select>
+                      </div>
+                      <div class="ocr-form__row">
+                        <label class="caption" for="classifyPdfFile">PDF file (Qwen only, optional)</label>
+                        <input type="file" id="classifyPdfFile" accept=".pdf" class="summarize-file-input" />
+                      </div>
+                      <div class="ocr-form__row">
                         <label class="caption" for="classifyDoc">Document (paste text or upload .txt)</label>
                         <input type="file" id="classifyFile" accept=".txt" class="summarize-file-input" />
-                        <textarea id="classifyDoc" name="text" rows="4" required placeholder="Paste document text here..."></textarea>
+                        <textarea id="classifyDoc" name="text" rows="4" placeholder="Paste document text here, or upload PDF above (Qwen)"></textarea>
                       </div>
                       <div class="ocr-form__row">
                         <label class="caption" for="classifyPrompt">Prompt (optional)</label>

@@ -591,6 +591,7 @@ a.btn-secondary {
 .ocr-form input[type='file'],
 .ocr-form input[type='text'],
 .ocr-form input[type='url'],
+.ocr-form select,
 .ocr-form textarea {
   padding: 8px 10px;
   border-radius: var(--radius-sm);

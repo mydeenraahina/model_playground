@@ -117,18 +117,47 @@ def call_modal_vision(image_base64: str, prompt: str, modal_url: str):
 
 
 def run_ocr(pdf_bytes: bytes, modal_url: str, prompt: str):
-
+    """EZOFIS: Vision-based OCR — render PDF pages as images, send to vision model."""
     results = []
-
     for page_index, page_bytes in pdf_pages_to_images(pdf_bytes):
-
         b64 = image_to_base64(page_bytes)
-
         text = call_modal_vision(b64, prompt, modal_url)
-
         results.append((page_index, text))
-
     return results
+
+
+def pdf_to_text(pdf_bytes: bytes) -> str:
+    """Extract text from PDF using PyMuPDF (Qwen flow)."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    parts = []
+    for page in doc:
+        parts.append(page.get_text())
+    doc.close()
+    return "\n".join(parts)
+
+
+def query_vllm_qwen(extracted_text: str, user_prompt: str, vllm_url: str) -> str:
+    """Send extracted text + prompt to Modal vLLM endpoint (OpenAI-compatible API)."""
+    from openai import OpenAI
+
+    full_prompt = f"Text extracted from PDF:\n{extracted_text}\n\nPrompt: {user_prompt}"
+    base_url = vllm_url.strip().rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = base_url + "/v1"
+    client = OpenAI(api_key="modal", base_url=base_url)
+    response = client.chat.completions.create(
+        model="Qwen/Qwen3-VL-8B-Thinking",
+        messages=[{"role": "user", "content": full_prompt}],
+        max_tokens=1024,
+    )
+    return response.choices[0].message.content or ""
+
+
+def run_ocr_qwen(pdf_bytes: bytes, vllm_url: str, prompt: str) -> list[tuple[int, str]]:
+    """Qwen: Text extraction + vLLM — extract PDF text, send to vLLM endpoint."""
+    extracted_text = pdf_to_text(pdf_bytes)
+    result = query_vllm_qwen(extracted_text, prompt, vllm_url)
+    return [(0, result)]
 
 
 # ------------------------------------------------
@@ -148,7 +177,8 @@ class OcrResponse(BaseModel):
 async def ocr_pdf(
     file: UploadFile = File(...),
     modal_url: str = Form(...),
-    prompt: str = Form(...)
+    prompt: str = Form(...),
+    model: str = Form("ezofis"),
 ):
 
     if not file.filename.lower().endswith(".pdf"):
@@ -156,22 +186,22 @@ async def ocr_pdf(
 
     pdf_bytes = await file.read()
 
+    modal_url = modal_url.strip()
     try:
-        results = run_ocr(pdf_bytes, modal_url, prompt)
+        if model == "qwen":
+            results = run_ocr_qwen(pdf_bytes, modal_url, prompt)
+        else:
+            results = run_ocr(pdf_bytes, modal_url, prompt)
     except Exception as e:
         raise HTTPException(500, str(e))
 
     parts = []
-
     for page, text in results:
         parts.append(f"--- Page {page+1} ---\n{text}")
 
     full_text = "\n\n".join(parts)
 
-    return OcrResponse(
-        text=full_text,
-        pages=len(results)
-    )
+    return OcrResponse(text=full_text, pages=len(results))
 
 
 # ------------------------------------------------
@@ -182,6 +212,7 @@ class ExtractJsonRequest(BaseModel):
     text: str
     prompt: str
     modal_url: str
+    model: str = "ezofis"
 
 
 def parse_json_from_response(raw: str):
@@ -199,10 +230,11 @@ def parse_json_from_response(raw: str):
 
 
 def call_modal_llm_text_to_json(text: str, prompt: str, modal_url: str):
-    client = OpenAI(
-        api_key="modal",
-        base_url=modal_url.rstrip("/") + "/v1"
-    )
+    """EZOFIS: Text to JSON via OpenAI-compatible API."""
+    base = modal_url.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    client = OpenAI(api_key="modal", base_url=base)
     combined_prompt = f"""
 {prompt}
 
@@ -217,10 +249,46 @@ Text:
         model="EZOFIS-VL-8B-Instruct",
         messages=[{"role": "user", "content": combined_prompt}],
         max_tokens=4096,
-        temperature=0
+        temperature=0,
     )
     raw = response.choices[0].message.content or ""
     return parse_json_from_response(raw)
+
+
+def call_modal_qwen_text_to_json(text: str, prompt: str, modal_url: str):
+    """Qwen: Text to JSON via vLLM (OpenAI-compatible API) with JSON extraction prompt."""
+    from openai import OpenAI
+
+    full_prompt = f"""You are a JSON extraction assistant.
+Analyze the following text and extract the information requested in the prompt.
+Return ONLY valid JSON, no extra text.
+
+PDF Text:
+{text}
+
+Instruction:
+{prompt}
+"""
+    base = modal_url.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    client = OpenAI(api_key="modal", base_url=base)
+    response = client.chat.completions.create(
+        model="Qwen/Qwen3-VL-8B-Thinking",
+        messages=[{"role": "user", "content": full_prompt}],
+        max_tokens=1024,
+        temperature=0,
+    )
+    raw = response.choices[0].message.content or ""
+    try:
+        return parse_json_from_response(raw)
+    except json.JSONDecodeError:
+        # Fallback: try to extract JSON from text
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            return json.loads(raw[start:end])
+        return {"raw_response": raw}
 
 
 # ------------------------------------------------
@@ -229,13 +297,37 @@ Text:
 
 @app.post("/extract-json")
 async def extract_json(body: ExtractJsonRequest):
+    """JSON body: text, prompt, modal_url, model (optional, default ezofis)."""
     try:
-        result = call_modal_llm_text_to_json(
-            body.text,
-            body.prompt,
-            body.modal_url
-        )
+        if body.model == "qwen":
+            result = call_modal_qwen_text_to_json(
+                body.text, body.prompt, body.modal_url
+            )
+        else:
+            result = call_modal_llm_text_to_json(
+                body.text, body.prompt, body.modal_url
+            )
         return result
+    except json.JSONDecodeError as e:
+        raise HTTPException(502, f"Invalid JSON returned: {e}")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/extract-json-from-pdf")
+async def extract_json_from_pdf(
+    file: UploadFile = File(...),
+    prompt: str = Form(...),
+    modal_url: str = Form(...),
+):
+    """PDF + prompt → extract text, send to Qwen, return JSON."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are allowed")
+    pdf_bytes = await file.read()
+    extracted_text = pdf_to_text(pdf_bytes)
+    modal_url = modal_url.strip()
+    try:
+        return call_modal_qwen_text_to_json(extracted_text, prompt, modal_url)
     except json.JSONDecodeError as e:
         raise HTTPException(502, f"Invalid JSON returned: {e}")
     except Exception as e:
@@ -250,13 +342,15 @@ class SummarizeRequest(BaseModel):
     text: str
     modal_url: str
     prompt: str | None = None
+    model: str = "ezofis"
 
 
 def call_modal_summary(text: str, modal_url: str, prompt: str | None):
-    client = OpenAI(
-        api_key="modal",
-        base_url=modal_url.rstrip("/") + "/v1"
-    )
+    """EZOFIS: Summarization via OpenAI-compatible API."""
+    base = modal_url.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    client = OpenAI(api_key="modal", base_url=base)
     if prompt is None:
         prompt = "Summarize the following document clearly and concisely."
     combined_prompt = f"""
@@ -269,9 +363,38 @@ Document:
         model="EZOFIS-VL-8B-Instruct",
         messages=[{"role": "user", "content": combined_prompt}],
         max_tokens=2048,
-        temperature=0.3
+        temperature=0.3,
     )
     return response.choices[0].message.content or ""
+
+
+def call_modal_qwen_summary(text: str, modal_url: str, prompt: str | None):
+    """Qwen: Summarization via vLLM with JSON extraction-style prompt."""
+    from openai import OpenAI
+
+    if prompt is None:
+        prompt = "Summarize the following document clearly and concisely."
+    full_prompt = f"""You are a text summarization assistant.
+Analyze the following text and summarize it according to the instructions.
+Return ONLY the summarized text.
+
+Text:
+{text}
+
+Instruction:
+{prompt}
+"""
+    base = modal_url.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    client = OpenAI(api_key="modal", base_url=base)
+    response = client.chat.completions.create(
+        model="Qwen/Qwen3-VL-8B-Thinking",
+        messages=[{"role": "user", "content": full_prompt}],
+        max_tokens=1024,
+        temperature=0.3,
+    )
+    return (response.choices[0].message.content or "").strip()
 
 
 # ------------------------------------------------
@@ -281,11 +404,31 @@ Document:
 @app.post("/summarize")
 async def summarize_document(body: SummarizeRequest):
     try:
-        summary = call_modal_summary(
-            body.text,
-            body.modal_url,
-            body.prompt
-        )
+        if body.model == "qwen":
+            summary = call_modal_qwen_summary(body.text, body.modal_url, body.prompt)
+        else:
+            summary = call_modal_summary(body.text, body.modal_url, body.prompt)
+        return {"summary": summary}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/summarize-from-pdf")
+async def summarize_from_pdf(
+    file: UploadFile = File(...),
+    prompt: str = Form(None),
+    modal_url: str = Form(...),
+):
+    """PDF + optional prompt → extract text, send to Qwen, return summary."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are allowed")
+    pdf_bytes = await file.read()
+    extracted_text = pdf_to_text(pdf_bytes)
+    modal_url = modal_url.strip()
+    default_prompt = "Summarize the following document clearly and concisely."
+    user_prompt = prompt.strip() if prompt else default_prompt
+    try:
+        summary = call_modal_qwen_summary(extracted_text, modal_url, user_prompt)
         return {"summary": summary}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -299,32 +442,59 @@ class ClassificationRequest(BaseModel):
     text: str
     modal_url: str
     prompt: str | None = None
+    model: str = "ezofis"
 
 
 def call_modal_classification(text: str, modal_url: str, prompt: str | None):
-    client = OpenAI(
-        api_key="modal",
-        base_url=modal_url.rstrip("/") + "/v1"
-    )
-
+    """EZOFIS: Classification via OpenAI-compatible API."""
+    base = modal_url.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    client = OpenAI(api_key="modal", base_url=base)
     if prompt is None:
         prompt = "Classify the type of document and return only the document type."
-
     combined_prompt = f"""
 {prompt}
 
 Document content:
 {text}
 """
-
     response = client.chat.completions.create(
         model="EZOFIS-VL-8B-Instruct",
         messages=[{"role": "user", "content": combined_prompt}],
         max_tokens=512,
-        temperature=0
+        temperature=0,
     )
-
     return response.choices[0].message.content or ""
+
+
+def call_modal_qwen_classification(text: str, modal_url: str, prompt: str | None):
+    """Qwen: Classification via vLLM with document classification prompt."""
+    from openai import OpenAI
+
+    if prompt is None:
+        prompt = "Classify the type of document and return only the document type."
+    full_prompt = f"""You are a document classification assistant.
+Analyze the following text and classify it according to the instructions.
+Return ONLY the classification result.
+
+Text:
+{text}
+
+Instruction:
+{prompt}
+"""
+    base = modal_url.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    client = OpenAI(api_key="modal", base_url=base)
+    response = client.chat.completions.create(
+        model="Qwen/Qwen3-VL-8B-Thinking",
+        messages=[{"role": "user", "content": full_prompt}],
+        max_tokens=256,
+        temperature=0,
+    )
+    return (response.choices[0].message.content or "").strip()
 
 
 # ------------------------------------------------
@@ -334,15 +504,38 @@ Document content:
 @app.post("/classify")
 async def classify_document(body: ClassificationRequest):
     try:
-        doc_type = call_modal_classification(
-            body.text,
-            body.modal_url,
-            body.prompt
-        )
+        if body.model == "qwen":
+            doc_type = call_modal_qwen_classification(
+                body.text, body.modal_url, body.prompt
+            )
+        else:
+            doc_type = call_modal_classification(
+                body.text, body.modal_url, body.prompt
+            )
+        return {"document_type": (doc_type or "").strip()}
     except Exception as e:
         raise HTTPException(500, str(e))
 
-    return {"document_type": (doc_type or "").strip()}
+
+@app.post("/classify-from-pdf")
+async def classify_from_pdf(
+    file: UploadFile = File(...),
+    prompt: str = Form(None),
+    modal_url: str = Form(...),
+):
+    """PDF + optional prompt → extract text, send to Qwen, return classification."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are allowed")
+    pdf_bytes = await file.read()
+    extracted_text = pdf_to_text(pdf_bytes)
+    modal_url = modal_url.strip()
+    default_prompt = "Classify the type of document and return only the document type."
+    user_prompt = prompt.strip() if prompt else default_prompt
+    try:
+        doc_type = call_modal_qwen_classification(extracted_text, modal_url, user_prompt)
+        return {"document_type": (doc_type or "").strip()}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # ------------------------------------------------

@@ -112,8 +112,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   showChoiceGrid();
 
+  const ocrModelSelect = document.getElementById('ocrModel');
+  const jsonModelSelect = document.getElementById('jsonModel');
+  const summarizeModelSelect = document.getElementById('summarizeModel');
+  const classifyModelSelect = document.getElementById('classifyModel');
+
   wannaTryBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
+    const card = btn.closest('.model-card');
+    const cardModel = card ? card.dataset.model : null;
+    if (ocrModelSelect && cardModel) ocrModelSelect.value = cardModel;
+    if (jsonModelSelect && cardModel) jsonModelSelect.value = cardModel;
+    if (summarizeModelSelect && cardModel) summarizeModelSelect.value = cardModel;
+    if (classifyModelSelect && cardModel) classifyModelSelect.value = cardModel;
+
     const isTryOpen = tryActions.classList.contains('is-open');
 
     if (isTryOpen) {
@@ -262,32 +274,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Text to JSON form submit → POST /extract-json
+  // Text to JSON form submit
   if (jsonForm && jsonResult) {
     jsonForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+      const jsonModel = document.getElementById('jsonModel')?.value || 'ezofis';
       const text = document.getElementById('jsonText').value.trim();
       const prompt = document.getElementById('jsonPrompt').value.trim();
       const modal_url = document.getElementById('jsonModalUrl').value.trim();
-      if (!text || !prompt || !modal_url) {
-        jsonResult.textContent = 'Please fill all fields.';
+      const pdfFile = document.getElementById('jsonPdfFile')?.files?.[0];
+
+      if (!prompt || !modal_url) {
+        jsonResult.textContent = 'Please fill prompt and Model URL.';
         return;
       }
-      jsonResult.textContent = 'Extracting JSON...';
-      try {
-        const response = await fetch('/extract-json', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, prompt, modal_url }),
-        });
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(errText || `Request failed with ${response.status}`);
+      if (jsonModel === 'qwen' && pdfFile) {
+        const formData = new FormData();
+        formData.append('file', pdfFile);
+        formData.append('prompt', prompt);
+        formData.append('modal_url', modal_url);
+        jsonResult.textContent = 'Extracting JSON from PDF (Qwen)...';
+        try {
+          const response = await fetch('/extract-json-from-pdf', { method: 'POST', body: formData });
+          if (!response.ok) throw new Error((await response.text()) || `Request failed ${response.status}`);
+          const data = await response.json();
+          jsonResult.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        } catch (error) {
+          jsonResult.textContent = `Error: ${error}`;
         }
-        const data = await response.json();
-        jsonResult.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-      } catch (error) {
-        jsonResult.textContent = `Error: ${error}`;
+      } else {
+        if (!text) {
+          jsonResult.textContent = jsonModel === 'qwen' ? 'Paste text or upload a PDF.' : 'Please enter or paste text.';
+          return;
+        }
+        jsonResult.textContent = 'Extracting JSON...';
+        try {
+          const response = await fetch('/extract-json', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, prompt, modal_url, model: jsonModel }),
+          });
+          if (!response.ok) throw new Error((await response.text()) || `Request failed ${response.status}`);
+          const data = await response.json();
+          jsonResult.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        } catch (error) {
+          jsonResult.textContent = `Error: ${error}`;
+        }
       }
     });
   }
@@ -305,33 +337,53 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Document Summarization form submit → POST /summarize
+  // Document Summarization form submit
   if (summarizeForm && summarizeResult) {
     summarizeForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+      const summarizeModel = document.getElementById('summarizeModel')?.value || 'ezofis';
       const text = document.getElementById('summarizeDoc').value.trim();
       const modal_url = document.getElementById('summarizeModalUrl').value.trim();
       const promptEl = document.getElementById('summarizePrompt');
       const prompt = promptEl && promptEl.value ? promptEl.value.trim() : null;
-      if (!text || !modal_url) {
-        summarizeResult.textContent = 'Please enter document text and Model URL.';
+      const pdfFile = document.getElementById('summarizePdfFile')?.files?.[0];
+
+      if (!modal_url) {
+        summarizeResult.textContent = 'Please enter Model URL.';
         return;
       }
-      summarizeResult.textContent = 'Summarizing...';
-      try {
-        const response = await fetch('/summarize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, modal_url, prompt }),
-        });
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(errText || `Request failed with ${response.status}`);
+      if (summarizeModel === 'qwen' && pdfFile) {
+        const formData = new FormData();
+        formData.append('file', pdfFile);
+        formData.append('modal_url', modal_url);
+        if (prompt) formData.append('prompt', prompt);
+        summarizeResult.textContent = 'Summarizing PDF (Qwen)...';
+        try {
+          const response = await fetch('/summarize-from-pdf', { method: 'POST', body: formData });
+          if (!response.ok) throw new Error((await response.text()) || `Request failed ${response.status}`);
+          const data = await response.json();
+          summarizeResult.textContent = data.summary || '(No summary returned)';
+        } catch (error) {
+          summarizeResult.textContent = `Error: ${error}`;
         }
-        const data = await response.json();
-        summarizeResult.textContent = data.summary || '(No summary returned)';
-      } catch (error) {
-        summarizeResult.textContent = `Error: ${error}`;
+      } else {
+        if (!text) {
+          summarizeResult.textContent = summarizeModel === 'qwen' ? 'Paste text or upload a PDF.' : 'Please enter document text.';
+          return;
+        }
+        summarizeResult.textContent = 'Summarizing...';
+        try {
+          const response = await fetch('/summarize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, modal_url, prompt, model: summarizeModel }),
+          });
+          if (!response.ok) throw new Error((await response.text()) || `Request failed ${response.status}`);
+          const data = await response.json();
+          summarizeResult.textContent = data.summary || '(No summary returned)';
+        } catch (error) {
+          summarizeResult.textContent = `Error: ${error}`;
+        }
       }
     });
   }
@@ -349,35 +401,53 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Document Classification form submit → POST /classify
+  // Document Classification form submit
   if (classifyForm && classifyResult) {
     classifyForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+      const classifyModel = document.getElementById('classifyModel')?.value || 'ezofis';
       const text = document.getElementById('classifyDoc').value.trim();
       const modal_url = document.getElementById('classifyModalUrl').value.trim();
       const promptEl = document.getElementById('classifyPrompt');
       const prompt = promptEl && promptEl.value ? promptEl.value.trim() : null;
+      const pdfFile = document.getElementById('classifyPdfFile')?.files?.[0];
 
-      if (!text || !modal_url) {
-        classifyResult.textContent = 'Please enter document text and Model URL.';
+      if (!modal_url) {
+        classifyResult.textContent = 'Please enter Model URL.';
         return;
       }
-
-      classifyResult.textContent = 'Classifying...';
-      try {
-        const response = await fetch('/classify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, modal_url, prompt }),
-        });
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(errText || `Request failed with ${response.status}`);
+      if (classifyModel === 'qwen' && pdfFile) {
+        const formData = new FormData();
+        formData.append('file', pdfFile);
+        formData.append('modal_url', modal_url);
+        if (prompt) formData.append('prompt', prompt);
+        classifyResult.textContent = 'Classifying PDF (Qwen)...';
+        try {
+          const response = await fetch('/classify-from-pdf', { method: 'POST', body: formData });
+          if (!response.ok) throw new Error((await response.text()) || `Request failed ${response.status}`);
+          const data = await response.json();
+          classifyResult.textContent = data.document_type || '(No result returned)';
+        } catch (error) {
+          classifyResult.textContent = `Error: ${error}`;
         }
-        const data = await response.json();
-        classifyResult.textContent = data.document_type || '(No document type returned)';
-      } catch (error) {
-        classifyResult.textContent = `Error: ${error}`;
+      } else {
+        if (!text) {
+          classifyResult.textContent = classifyModel === 'qwen' ? 'Paste text or upload a PDF.' : 'Please enter document text.';
+          return;
+        }
+        classifyResult.textContent = 'Classifying...';
+        try {
+          const response = await fetch('/classify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, modal_url, prompt, model: classifyModel }),
+          });
+          if (!response.ok) throw new Error((await response.text()) || `Request failed ${response.status}`);
+          const data = await response.json();
+          classifyResult.textContent = data.document_type || '(No document type returned)';
+        } catch (error) {
+          classifyResult.textContent = `Error: ${error}`;
+        }
       }
     });
   }
