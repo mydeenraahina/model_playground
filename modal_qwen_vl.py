@@ -1,6 +1,6 @@
 """
-Deploy Qwen3-VL-8B-Thinking (text-only) on Modal with vLLM.
-Optimized for PDF/text prompts, skips vision encoder to save GPU memory.
+Deploy Qwen3-VL-8B-Thinking on Modal with vLLM.
+Supports text prompts and page-image inputs for scanned PDFs.
 
 Run: modal deploy modal_qwen_vl.py
 """
@@ -24,12 +24,6 @@ vllm_image = (
 # Model Config
 # -----------------------------
 MODEL_NAME = "Qwen/Qwen3-VL-8B-Thinking"
-
-# Text-only flags: skips vision encoder to save GPU memory
-TEXT_ONLY_FLAGS = [
-    "--limit-mm-per-prompt.video", "0",
-    "--limit-mm-per-prompt.image", "0",
-]
 
 # -----------------------------
 # Modal Volumes (Cache)
@@ -62,7 +56,7 @@ FAST_BOOT = True
 @modal.concurrent(max_inputs=16)
 @modal.web_server(port=VLLM_PORT, startup_timeout=10 * MINUTES)
 def serve():
-    """Start vLLM server for text-only workloads."""
+    """Start vLLM server for multimodal Qwen workloads."""
     cmd = [
         "vllm",
         "serve",
@@ -71,7 +65,6 @@ def serve():
         "--served-model-name", MODEL_NAME,
         "--host", "0.0.0.0",
         "--port", str(VLLM_PORT),
-        *TEXT_ONLY_FLAGS,
         "--enforce-eager" if FAST_BOOT else "--no-enforce-eager",
         "--tensor-parallel-size", str(N_GPU),
     ]

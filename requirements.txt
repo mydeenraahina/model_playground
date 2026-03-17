@@ -5,3 +5,7 @@ openai
 python-multipart
 pydantic
 jinja2
+pandas
+openpyxl
+python-docx
+requests
