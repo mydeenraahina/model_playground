@@ -168,10 +168,6 @@
                   <span class="try-choice-card__title">Document Classification</span>
                   <span class="try-choice-card__desc">Classify document type with a custom prompt and model URL.</span>
                 </button>
-                <button type="button" class="try-choice-card" id="chatDocChoiceCard" aria-label="Chat with Document">
-                  <span class="try-choice-card__title">Chat with Document</span>
-                  <span class="try-choice-card__desc">Ask questions about your document (GPT-4o-mini only).</span>
-                </button>
               </div>
 
               <!-- Step 2a: OCR screen - form left, buttons + result right (no extra blank space) -->
@@ -598,61 +594,6 @@
                 </div>
               </div>
 
-              <!-- Step 2e: Chat with Document (GPT-4o-mini only) -->
-              <div class="try-ocr-screen" id="tryChatDocScreen" hidden>
-                <div class="try-ocr-layout">
-                  <div class="try-ocr-left">
-                    <form class="ocr-form" id="chatDocForm">
-                      <div class="ocr-form__row">
-                        <label class="caption">Model</label>
-                        <div class="model-name-display">GPT-4o-mini</div>
-                      </div>
-                      <div class="ocr-form__row">
-                        <label class="caption" for="chatDocFile">Document (PDF, DOCX, XLSX, MD, TXT)</label>
-                        <input id="chatDocFile" name="file" type="file" accept=".pdf,.docx,.xlsx,.xls,.md,.txt" required />
-                      </div>
-                      <div class="ocr-form__row">
-                        <label class="caption" for="chatDocPrompt">Your question</label>
-                        <input id="chatDocPrompt" name="prompt" type="text" required placeholder="Ask a question about the document" />
-                      </div>
-                      <div class="ocr-form__row">
-                        <label class="caption" for="chatDocAzureEndpoint">Azure OpenAI Endpoint</label>
-                        <input id="chatDocAzureEndpoint" name="azure_endpoint" type="url" required placeholder="https://your-resource.openai.azure.com/..." />
-                      </div>
-                      <div class="ocr-form__row">
-                        <label class="caption" for="chatDocAzureKey">Azure OpenAI API Key</label>
-                        <input id="chatDocAzureKey" name="azure_api_key" type="password" required placeholder="Your Azure API key" />
-                      </div>
-                      <button class="btn-primary try-submit-btn" type="submit">
-                        Ask
-                      </button>
-                    </form>
-                  </div>
-                  <div class="try-ocr-right">
-                    <button type="button" class="try-info-card try-info-card--pressable" data-action="ocr" aria-label="OCR">
-                      <span class="try-info-card__title">OCR</span>
-                      <span class="try-info-card__desc">You can upload your docs and get the OCR text of it.</span>
-                    </button>
-                    <button type="button" class="try-info-card try-info-card--pressable" data-action="json" aria-label="Text to JSON">
-                      <span class="try-info-card__title">Text to JSON</span>
-                      <span class="try-info-card__desc">You can convert the text to JSON here.</span>
-                    </button>
-                    <button type="button" class="try-info-card try-info-card--pressable" data-action="summarize" aria-label="Document Summarization">
-                      <span class="try-info-card__title">Document summarization</span>
-                      <span class="try-info-card__desc">Quickly summarize your document content.</span>
-                    </button>
-                    <button type="button" class="try-info-card try-info-card--pressable" data-action="classify" aria-label="Document Classification">
-                      <span class="try-info-card__title">Document classification</span>
-                      <span class="try-info-card__desc">Detect the document type in one click.</span>
-                    </button>
-                    <button type="button" class="try-info-card try-info-card--pressable" data-action="chat" aria-label="Chat with Document">
-                      <span class="try-info-card__title">Chat with Document</span>
-                      <span class="try-info-card__desc">Ask questions about your document.</span>
-                    </button>
-                    <div class="ocr-result caption" id="chatDocResult" aria-live="polite"></div>
-                  </div>
-                </div>
-              </div>
               </div>
             </section>
           </div>

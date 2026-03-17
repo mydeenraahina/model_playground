@@ -34,12 +34,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const tryJsonScreen = document.getElementById('tryJsonScreen');
   const trySummarizeScreen = document.getElementById('trySummarizeScreen');
   const tryClassifyScreen = document.getElementById('tryClassifyScreen');
-  const tryChatDocScreen = document.getElementById('tryChatDocScreen');
   const ocrChoiceCard = document.getElementById('ocrChoiceCard');
   const textToJsonChoiceCard = document.getElementById('textToJsonChoiceCard');
   const summarizeChoiceCard = document.getElementById('summarizeChoiceCard');
   const classifyChoiceCard = document.getElementById('classifyChoiceCard');
-  const chatDocChoiceCard = document.getElementById('chatDocChoiceCard');
   const ocrForm = document.getElementById('ocrForm');
   const ocrResult = document.getElementById('ocrResult');
   const jsonForm = document.getElementById('jsonForm');
@@ -48,8 +46,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const summarizeResult = document.getElementById('summarizeResult');
   const classifyForm = document.getElementById('classifyForm');
   const classifyResult = document.getElementById('classifyResult');
-  const chatDocForm = document.getElementById('chatDocForm');
-  const chatDocResult = document.getElementById('chatDocResult');
   const tryMain = document.getElementById('tryMain');
 
   if (!wannaTryBtns.length || !tryActions) {
@@ -67,7 +63,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tryJsonScreen) tryJsonScreen.hidden = true;
     if (trySummarizeScreen) trySummarizeScreen.hidden = true;
     if (tryClassifyScreen) tryClassifyScreen.hidden = true;
-    if (tryChatDocScreen) tryChatDocScreen.hidden = true;
     if (tryBackBtn) tryBackBtn.style.display = 'none';
   }
   function hideChoiceGrid() {
@@ -85,7 +80,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tryJsonScreen) tryJsonScreen.hidden = true;
     if (trySummarizeScreen) trySummarizeScreen.hidden = true;
     if (tryClassifyScreen) tryClassifyScreen.hidden = true;
-    if (tryChatDocScreen) tryChatDocScreen.hidden = true;
     if (tryBackBtn) tryBackBtn.style.display = 'inline-block';
     requestAnimationFrame(resizeTryExpansion);
   }
@@ -96,7 +90,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tryJsonScreen) tryJsonScreen.hidden = false;
     if (trySummarizeScreen) trySummarizeScreen.hidden = true;
     if (tryClassifyScreen) tryClassifyScreen.hidden = true;
-    if (tryChatDocScreen) tryChatDocScreen.hidden = true;
     if (tryBackBtn) tryBackBtn.style.display = 'inline-block';
     requestAnimationFrame(resizeTryExpansion);
   }
@@ -107,7 +100,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tryJsonScreen) tryJsonScreen.hidden = true;
     if (trySummarizeScreen) trySummarizeScreen.hidden = false;
     if (tryClassifyScreen) tryClassifyScreen.hidden = true;
-    if (tryChatDocScreen) tryChatDocScreen.hidden = true;
     if (tryBackBtn) tryBackBtn.style.display = 'inline-block';
     requestAnimationFrame(resizeTryExpansion);
   }
@@ -118,17 +110,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tryJsonScreen) tryJsonScreen.hidden = true;
     if (trySummarizeScreen) trySummarizeScreen.hidden = true;
     if (tryClassifyScreen) tryClassifyScreen.hidden = false;
-    if (tryChatDocScreen) tryChatDocScreen.hidden = true;
-    if (tryBackBtn) tryBackBtn.style.display = 'inline-block';
-    requestAnimationFrame(resizeTryExpansion);
-  }
-  function showChatDocScreen() {
-    hideChoiceGrid();
-    if (tryOcrScreen) tryOcrScreen.hidden = true;
-    if (tryJsonScreen) tryJsonScreen.hidden = true;
-    if (trySummarizeScreen) trySummarizeScreen.hidden = true;
-    if (tryClassifyScreen) tryClassifyScreen.hidden = true;
-    if (tryChatDocScreen) tryChatDocScreen.hidden = false;
     if (tryBackBtn) tryBackBtn.style.display = 'inline-block';
     requestAnimationFrame(resizeTryExpansion);
   }
@@ -174,7 +155,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     toggleModelUrlRows();
     updateAcceptedFileTypes(modelId);
-    toggleChatActions(modelId);
   }
 
   function toggleModelUrlRows() {
@@ -190,19 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const el = document.getElementById(id);
       if (el) el.style.display = isAzureModel ? '' : 'none';
     });
-  }
-
-  function toggleChatActions(modelId) {
-    const showChat = modelId === 'gpt4o-mini';
-    if (chatDocChoiceCard) {
-      chatDocChoiceCard.style.display = showChat ? '' : 'none';
-    }
-    document.querySelectorAll('[data-action="chat"]').forEach(card => {
-      card.style.display = showChat ? '' : 'none';
-    });
-    if (!showChat && tryChatDocScreen) {
-      tryChatDocScreen.hidden = true;
-    }
   }
 
   function updateAcceptedFileTypes(modelId) {
@@ -288,14 +255,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Choice grid: Chat with Document card → show Chat screen
-  if (chatDocChoiceCard && tryChatDocScreen) {
-    chatDocChoiceCard.addEventListener('click', () => {
-      showChatDocScreen();
-      tryChatDocScreen.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }
-
   // No back / switch buttons now – click cards to change tools
 
   // Right-side action cards (shown on all try screens)
@@ -346,16 +305,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tryClassifyScreen) {
           tryClassifyScreen.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
-      });
-    });
-  }
-
-  const chatInfoCards = document.querySelectorAll('[data-action="chat"]');
-  if (chatInfoCards.length && tryChatDocScreen) {
-    chatInfoCards.forEach((card) => {
-      card.addEventListener('click', () => {
-        showChatDocScreen();
-        tryChatDocScreen.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     });
   }
@@ -621,26 +570,4 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Chat with Document form submit
-  if (chatDocForm && chatDocResult) {
-    chatDocForm.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const formData = new FormData(chatDocForm);
-      const file = formData.get('file');
-      const prompt = formData.get('prompt');
-      if (!file || !prompt) {
-        chatDocResult.textContent = 'Please select a file and enter your question.';
-        return;
-      }
-      chatDocResult.textContent = 'Asking...';
-      try {
-        const response = await fetch('/chat-with-document', { method: 'POST', body: formData });
-        if (!response.ok) throw new Error((await response.text()) || `Request failed ${response.status}`);
-        const data = await response.json();
-        chatDocResult.textContent = data.answer || '(No answer returned)';
-      } catch (error) {
-        chatDocResult.textContent = `Error: ${error}`;
-      }
-    });
-  }
 });
