@@ -1,17 +1,37 @@
 import base64
+import hashlib
 import io
 import json
 import os
+import secrets
+import shutil
+import time
 import fitz
 import requests
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from openai import AzureOpenAI, OpenAI
 from pydantic import BaseModel
+from manager_db import (
+    create_issue,
+    create_test_run,
+    create_user,
+    get_custom_model_by_name,
+    get_user_by_username,
+    init_db,
+    list_custom_models,
+    list_user_test_runs,
+    upsert_custom_model,
+)
 
 app = FastAPI(title="Modal OCR API")
 
@@ -21,6 +41,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("MODELCRAFT_SESSION_SECRET", "modelcraft-dev-secret"),
+    same_site="lax",
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -89,20 +114,80 @@ MODEL_DETAILS = {
 }
 
 
+ALL_PERFORMANCE_OPTIONS = [
+    "ocr",
+    "text_to_json",
+    "document_summarization",
+    "document_classification",
+    "chatbot",
+    "text_generation",
+]
+
+PERFORMANCE_LABELS = {
+    "ocr": "OCR",
+    "text_to_json": "Text to JSON",
+    "document_summarization": "Document summarization",
+    "document_classification": "Document classification",
+    "chatbot": "Chatbot",
+    "text_generation": "Text generation",
+}
+
+# Fresh-start experience: users add their own models instead of
+# starting with a preloaded built-in catalog.
+BUILTIN_MANAGER_MODELS = {}
+
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+init_db()
+
+ALLOWED_EMAIL_DOMAIN = "ezofis.com"
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    if get_current_user_or_none(request):
+        return RedirectResponse(url="/playground", status_code=302)
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "google_client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
+        },
+    )
+
+
+@app.get("/playground", response_class=HTMLResponse)
+async def playground(request: Request):
+    user = get_current_user_or_none(request)
+    if not user:
+        return RedirectResponse(url="/", status_code=302)
+    return templates.TemplateResponse(
+        "manager.html",
+        {
+            "request": request,
+            "user": user,
+        },
+    )
+
+
+@app.get("/manager", response_class=HTMLResponse)
+async def manager_home(request: Request):
+    if not get_current_user_or_none(request):
+        return RedirectResponse(url="/", status_code=302)
+    return RedirectResponse(url="/playground", status_code=302)
 
 
 @app.get("/model/{model_id}", response_class=HTMLResponse)
 async def model_details(request: Request, model_id: str):
-    if model_id not in MODEL_DETAILS:
-        raise HTTPException(404, "Model not found")
-    model = MODEL_DETAILS[model_id]
-    return templates.TemplateResponse(
-        "model_details.html",
-        {"request": request, "model": model, "model_id": model_id},
-    )
+    if not get_current_user_or_none(request):
+        return RedirectResponse(url="/", status_code=302)
+    return RedirectResponse(url="/playground", status_code=302)
+
+
+@app.on_event("startup")
+async def startup_event():
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    init_db()
 
 
 # ------------------------------------------------
@@ -519,6 +604,7 @@ class OcrResponse(BaseModel):
 
 @app.post("/ocr", response_model=OcrResponse)
 async def ocr_pdf(
+    request: Request,
     file: UploadFile = File(...),
     modal_url: str = Form(None),
     prompt: str = Form("Extract all text"),
@@ -526,6 +612,7 @@ async def ocr_pdf(
     azure_endpoint: str = Form(None),
     azure_api_key: str = Form(None),
 ):
+    require_authenticated_user(request)
     file_bytes = await file.read()
     filename = file.filename or ""
 
@@ -750,8 +837,9 @@ Return the output strictly in JSON format.
 # ------------------------------------------------
 
 @app.post("/extract-json")
-async def extract_json(body: ExtractJsonRequest):
+async def extract_json(body: ExtractJsonRequest, request: Request):
     """JSON body: text, prompt, modal_url, model (optional, default ezofis)."""
+    require_authenticated_user(request)
     try:
         if body.model == "gpt4o-mini":
             result = call_azure_gpt4o_text_to_json(
@@ -790,6 +878,7 @@ async def extract_json(body: ExtractJsonRequest):
 
 @app.post("/extract-json-from-pdf")
 async def extract_json_from_pdf(
+    request: Request,
     file: UploadFile = File(...),
     prompt: str = Form(...),
     modal_url: str = Form(None),
@@ -798,6 +887,7 @@ async def extract_json_from_pdf(
     azure_api_key: str = Form(None),
 ):
     """File + prompt → extract text, send to model, return JSON."""
+    require_authenticated_user(request)
     file_bytes = await file.read()
     filename = file.filename or ""
 
@@ -975,7 +1065,8 @@ Generate a clear and concise summary."""
 # ------------------------------------------------
 
 @app.post("/summarize")
-async def summarize_document(body: SummarizeRequest):
+async def summarize_document(body: SummarizeRequest, request: Request):
+    require_authenticated_user(request)
     try:
         if body.model == "gpt4o-mini":
             summary = call_azure_gpt4o_summary(
@@ -1008,6 +1099,7 @@ async def summarize_document(body: SummarizeRequest):
 
 @app.post("/summarize-from-pdf")
 async def summarize_from_pdf(
+    request: Request,
     file: UploadFile = File(...),
     prompt: str = Form(None),
     modal_url: str = Form(None),
@@ -1016,6 +1108,7 @@ async def summarize_from_pdf(
     azure_api_key: str = Form(None),
 ):
     """File + optional prompt → extract text, send to model, return summary."""
+    require_authenticated_user(request)
     file_bytes = await file.read()
     filename = file.filename or ""
     default_prompt = "Summarize the following document clearly and concisely."
@@ -1198,7 +1291,8 @@ Return only the classification result.
 # ------------------------------------------------
 
 @app.post("/classify")
-async def classify_document(body: ClassificationRequest):
+async def classify_document(body: ClassificationRequest, request: Request):
+    require_authenticated_user(request)
     try:
         if body.model == "gpt4o-mini":
             doc_type = call_azure_gpt4o_classification(
@@ -1235,6 +1329,7 @@ async def classify_document(body: ClassificationRequest):
 
 @app.post("/classify-from-pdf")
 async def classify_from_pdf(
+    request: Request,
     file: UploadFile = File(...),
     prompt: str = Form(None),
     modal_url: str = Form(None),
@@ -1243,6 +1338,7 @@ async def classify_from_pdf(
     azure_api_key: str = Form(None),
 ):
     """File + optional prompt → extract text, send to model, return classification."""
+    require_authenticated_user(request)
     file_bytes = await file.read()
     filename = file.filename or ""
     default_prompt = "Classify the type of document and return only the document type."
@@ -1299,12 +1395,14 @@ async def classify_from_pdf(
 
 @app.post("/chat-with-document")
 async def chat_with_document(
+    request: Request,
     file: UploadFile = File(...),
     prompt: str = Form(...),
     azure_endpoint: str = Form(...),
     azure_api_key: str = Form(...),
 ):
     """Extract text from file, answer question using document context (GPT-4o-mini)."""
+    require_authenticated_user(request)
     file_bytes = await file.read()
     filename = file.filename or ""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -1330,6 +1428,837 @@ Answer only from the document."""
 
 
 # ------------------------------------------------
+# AI Test Manager
+# ------------------------------------------------
+
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+    email: str | None = None
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+
+class EmailAuthRequest(BaseModel):
+    email: str
+
+
+class ModelRegistrationRequest(BaseModel):
+    name: str
+    provider: str
+    endpoint_url: str | None = None
+    api_key: str | None = None
+    api_version: str | None = None
+    default_prompt: str | None = None
+    capabilities: list[str]
+    metadata: dict[str, Any] | None = None
+
+
+class IssueCreateRequest(BaseModel):
+    model_name: str
+    performance_type: str
+    email: str
+    description: str
+
+
+class OptionUnavailableError(Exception):
+    pass
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000
+    ).hex()
+    return f"{salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, digest = stored.split("$", 1)
+    except ValueError:
+        return False
+    check = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000
+    ).hex()
+    return secrets.compare_digest(check, digest)
+
+
+def get_current_user_or_none(request: Request) -> dict[str, Any] | None:
+    user = request.session.get("auth_user") or request.session.get("google_user")
+    if not user:
+        return None
+    email = (user.get("email") or "").strip().lower()
+    if not email.endswith(f"@{ALLOWED_EMAIL_DOMAIN}"):
+        request.session.clear()
+        return None
+    return user
+
+
+def require_authenticated_user(request: Request) -> dict[str, Any]:
+    user = get_current_user_or_none(request)
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    return user
+
+
+def ensure_internal_user(email: str) -> dict[str, Any]:
+    user = get_user_by_username(email)
+    if user:
+        return user
+    return create_user(
+        username=email,
+        email=email,
+        password_hash=hash_password(secrets.token_urlsafe(32)),
+    )
+
+
+def create_session_user(email: str, *, name: str = "", picture: str = "") -> dict[str, Any]:
+    normalized_email = (email or "").strip().lower()
+    if not normalized_email.endswith(f"@{ALLOWED_EMAIL_DOMAIN}"):
+        raise HTTPException(403, "Access Denied")
+
+    internal_user = ensure_internal_user(normalized_email)
+    derived_name = name.strip() if name else normalized_email.split("@", 1)[0].replace(".", " ").replace("_", " ").title()
+    return {
+        "id": internal_user["id"],
+        "username": internal_user["username"],
+        "name": derived_name,
+        "email": normalized_email,
+        "picture": picture,
+    }
+
+
+def verify_google_credential(credential: str) -> dict[str, Any]:
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+    if not client_id:
+        raise HTTPException(500, "GOOGLE_CLIENT_ID is not configured")
+
+    try:
+        token_info = id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            client_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(401, "Invalid Google token") from exc
+
+    email = (token_info.get("email") or "").strip().lower()
+    if not token_info.get("email_verified"):
+        raise HTTPException(401, "Email is not verified by Google")
+    if not email.endswith(f"@{ALLOWED_EMAIL_DOMAIN}"):
+        raise HTTPException(403, "Access Denied")
+
+    return {
+        "name": token_info.get("name", ""),
+        "email": email,
+        "picture": token_info.get("picture", ""),
+    }
+
+
+def model_payload(
+    *,
+    name: str,
+    provider: str,
+    capabilities: list[str],
+    model_key: str,
+    builtin: bool,
+    endpoint_url: str | None = None,
+    default_prompt: str | None = None,
+    api_version: str | None = None,
+) -> dict[str, Any]:
+    unavailable = [option for option in ALL_PERFORMANCE_OPTIONS if option not in capabilities]
+    return {
+        "model_key": model_key,
+        "name": name,
+        "provider": provider,
+        "capabilities": capabilities,
+        "available_options": capabilities,
+        "unavailable_options": unavailable,
+        "builtin": builtin,
+        "endpoint_url": endpoint_url,
+        "default_prompt": default_prompt,
+        "api_version": api_version,
+    }
+
+
+def get_builtin_manager_models() -> list[dict[str, Any]]:
+    models = []
+    for key, item in BUILTIN_MANAGER_MODELS.items():
+        models.append(
+            model_payload(
+                name=item["name"],
+                provider=item["provider"],
+                capabilities=item["capabilities"],
+                model_key=key,
+                builtin=True,
+                endpoint_url=item.get("endpoint_url"),
+                default_prompt=item.get("default_prompt"),
+                api_version=(
+                    AZURE_OPENAI_API_VERSION_GPT41
+                    if key == "gpt41"
+                    else AZURE_OPENAI_API_VERSION_GPT4O
+                    if key == "gpt4o-mini"
+                    else None
+                ),
+            )
+        )
+    return models
+
+
+def get_all_manager_models() -> list[dict[str, Any]]:
+    builtin = get_builtin_manager_models()
+    custom = [
+        model_payload(
+            name=item["name"],
+            provider=item["provider"],
+            capabilities=item["capabilities"],
+            model_key=item["name"],
+            builtin=False,
+            endpoint_url=item.get("endpoint_url"),
+            default_prompt=item.get("default_prompt"),
+            api_version=item.get("api_version"),
+        )
+        for item in list_custom_models()
+    ]
+    return builtin + custom
+
+
+def search_manager_model(query: str) -> dict[str, Any] | None:
+    needle = query.strip().lower()
+    if not needle:
+        return None
+
+    exact = next((m for m in get_all_manager_models() if m["name"].lower() == needle or m["model_key"].lower() == needle), None)
+    if exact:
+        return exact
+
+    partial = next((m for m in get_all_manager_models() if needle in m["name"].lower() or needle in m["model_key"].lower()), None)
+    return partial
+
+
+def get_model_runtime_config(model_key: str) -> dict[str, Any]:
+    if model_key in BUILTIN_MANAGER_MODELS:
+        item = BUILTIN_MANAGER_MODELS[model_key]
+        config = {
+            "model_key": model_key,
+            "name": item["name"],
+            "provider": item["provider"],
+            "capabilities": item["capabilities"],
+            "endpoint_url": item.get("endpoint_url"),
+            "api_key": None,
+            "api_version": (
+                AZURE_OPENAI_API_VERSION_GPT41
+                if model_key == "gpt41"
+                else AZURE_OPENAI_API_VERSION_GPT4O
+                if model_key == "gpt4o-mini"
+                else None
+            ),
+            "default_prompt": item.get("default_prompt"),
+            "builtin": True,
+            "id": None,
+        }
+        return config
+
+    model = get_custom_model_by_name(model_key)
+    if not model:
+        raise HTTPException(404, "Model not found")
+    return {
+        "model_key": model["name"],
+        "name": model["name"],
+        "provider": model["provider"],
+        "capabilities": model["capabilities"],
+        "endpoint_url": model.get("endpoint_url"),
+        "api_key": None,
+        "api_version": model.get("api_version"),
+        "default_prompt": model.get("default_prompt"),
+        "builtin": False,
+        "id": model["id"],
+    }
+
+
+def build_ad_hoc_runtime_config(
+    *,
+    model_name: str,
+    provider: str,
+    capabilities: list[str],
+    endpoint_url: str | None = None,
+    api_version: str | None = None,
+    default_prompt: str | None = None,
+) -> dict[str, Any]:
+    name = model_name.strip()
+    runtime_provider = provider.strip().lower()
+    if not name:
+        raise HTTPException(400, "Model name is required.")
+    if runtime_provider not in {"azure", "modal", "huggingface", "other"}:
+        raise HTTPException(400, "Unsupported provider.")
+
+    normalized_capabilities = [item for item in capabilities if item in ALL_PERFORMANCE_OPTIONS]
+    if not normalized_capabilities:
+        raise HTTPException(400, "Select at least one performance option.")
+
+    return {
+        "model_key": "__adhoc__",
+        "name": name,
+        "provider": runtime_provider,
+        "capabilities": normalized_capabilities,
+        "endpoint_url": endpoint_url,
+        "api_key": None,
+        "api_version": api_version,
+        "default_prompt": default_prompt,
+        "builtin": False,
+        "id": None,
+    }
+
+
+def resolve_runtime_value(primary: str | None, fallback: str | None) -> str | None:
+    return (primary or "").strip() or (fallback or "").strip() or None
+
+
+def save_uploaded_file_for_user(user_id: int, upload: UploadFile, file_bytes: bytes) -> str:
+    safe_name = Path(upload.filename or "upload.bin").name
+    file_path = UPLOAD_DIR / f"user_{user_id}_{int(time.time() * 1000)}_{safe_name}"
+    with open(file_path, "wb") as outfile:
+        outfile.write(file_bytes)
+    return str(file_path)
+
+
+def build_modal_client(endpoint_url: str, api_key: str | None) -> OpenAI:
+    base = endpoint_url.strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    return OpenAI(api_key=(api_key or "modal"), base_url=base)
+
+
+def parse_provider_output(raw: Any) -> tuple[str | None, dict[str, Any] | None]:
+    if isinstance(raw, dict):
+        return None, raw
+    return (raw or "").strip() if isinstance(raw, str) else str(raw), None
+
+
+def run_azure_text_task(
+    *,
+    model_name: str,
+    endpoint: str,
+    api_key: str,
+    api_version: str,
+    system: str,
+    user_content: str,
+    temperature: float = 0,
+    max_tokens: int | None = None,
+) -> str:
+    client = build_azure_openai_client(endpoint, api_key, api_version=api_version)
+    kwargs: dict[str, Any] = {"temperature": temperature}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ],
+        **kwargs,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+def run_azure_ocr_generic(
+    *,
+    model_name: str,
+    endpoint: str,
+    api_key: str,
+    api_version: str,
+    prompt: str,
+    file_bytes: bytes,
+    filename: str,
+) -> str:
+    if filename.lower().endswith(".pdf"):
+        text, images = extract_pdf_content_gpt4o(file_bytes)
+    else:
+        text = extract_text_gpt4o(file_bytes, filename).strip()
+        images = []
+
+    client = build_azure_openai_client(endpoint, api_key, api_version=api_version)
+    content: list[dict[str, Any]] = []
+    if text:
+        content.append({"type": "text", "text": text})
+    for image_base64 in images:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+            }
+        )
+
+    full_prompt = f"{prompt}\nExtract text from the document content below."
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {"role": "system", "content": "You are an OCR assistant."},
+            {"role": "user", "content": [{"type": "text", "text": full_prompt}, *content]},
+        ],
+        temperature=0,
+    )
+    return (response.choices[0].message.content or "").strip() or "(No text extracted)"
+
+
+def run_hugging_face_task(
+    *,
+    endpoint_url: str,
+    api_key: str | None,
+    performance_type: str,
+    prompt: str,
+    input_text: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    if performance_type == "ocr":
+        raise OptionUnavailableError("This option is currently not available.")
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {"inputs": f"{prompt}\n\n{input_text or ''}".strip()}
+    response = requests.post(endpoint_url, headers=headers, json=payload, timeout=60)
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, list) and data and isinstance(data[0], dict) and "generated_text" in data[0]:
+        return data[0]["generated_text"], data[0]
+    if isinstance(data, dict):
+        return None, data
+    return str(data), None
+
+
+def run_other_provider_task(
+    *,
+    endpoint_url: str,
+    api_key: str | None,
+    performance_type: str,
+    prompt: str,
+    input_text: str | None,
+    file_bytes: bytes | None,
+    filename: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    payload: dict[str, Any] = {
+        "performance_type": performance_type,
+        "prompt": prompt,
+        "input_text": input_text,
+    }
+    if file_bytes is not None and filename:
+        payload["file_name"] = filename
+        payload["file_base64"] = base64.standard_b64encode(file_bytes).decode("ascii")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    response = requests.post(endpoint_url, headers=headers, json=payload, timeout=60)
+    response.raise_for_status()
+    data = response.json()
+    return parse_provider_output(data)
+
+
+def execute_manager_test(
+    *,
+    config: dict[str, Any],
+    performance_type: str,
+    prompt: str,
+    input_text: str | None,
+    file_bytes: bytes | None,
+    filename: str | None,
+    endpoint_url: str | None,
+    api_key: str | None,
+    api_version: str | None,
+) -> dict[str, Any]:
+    provider = config["provider"]
+    model_name = config["name"]
+    endpoint = resolve_runtime_value(endpoint_url, config.get("endpoint_url"))
+    key = resolve_runtime_value(api_key, config.get("api_key"))
+    version = resolve_runtime_value(api_version, config.get("api_version")) or AZURE_OPENAI_API_VERSION
+
+    if performance_type == "ocr" and not file_bytes:
+        raise HTTPException(400, "File upload is required for OCR.")
+    if performance_type != "ocr" and not (input_text or prompt):
+        raise HTTPException(400, "Text input or prompt is required.")
+
+    if provider == "azure":
+        if not endpoint or not key:
+            raise HTTPException(400, "Azure endpoint and API key are required.")
+        azure_model = GPT41_MODEL_NAME if model_name == "GPT-4.1" else GPT4O_MODEL_NAME if model_name == "GPT-4o-mini" else model_name
+        azure_version = version
+        if model_name == "GPT-4.1":
+            azure_version = AZURE_OPENAI_API_VERSION_GPT41
+        elif model_name == "GPT-4o-mini":
+            azure_version = AZURE_OPENAI_API_VERSION_GPT4O
+
+        if performance_type == "ocr":
+            if model_name == "GPT-4.1":
+                output_text = run_ocr_gpt41(file_bytes, filename or "upload.pdf", prompt, endpoint, key)
+            elif model_name == "GPT-4o-mini":
+                output_text = run_ocr_gpt4o(file_bytes, filename or "upload.pdf", prompt, endpoint, key)
+            else:
+                output_text = run_azure_ocr_generic(
+                    model_name=azure_model,
+                    endpoint=endpoint,
+                    api_key=key,
+                    api_version=azure_version,
+                    prompt=prompt,
+                    file_bytes=file_bytes or b"",
+                    filename=filename or "upload.pdf",
+                )
+            return {"output_text": output_text, "output_json": None}
+
+        if performance_type == "text_to_json":
+            if model_name == "GPT-4.1":
+                output_json = call_azure_gpt41_text_to_json(input_text or "", prompt, endpoint, key)
+            elif model_name == "GPT-4o-mini":
+                output_json = call_azure_gpt4o_text_to_json(input_text or "", prompt, endpoint, key)
+            else:
+                raw = run_azure_text_task(
+                    model_name=azure_model,
+                    endpoint=endpoint,
+                    api_key=key,
+                    api_version=azure_version,
+                    system="You are an AI that converts text into structured JSON.",
+                    user_content=f"{prompt}\n\nInput Text:\n{input_text or ''}\n\nReturn the output strictly in JSON format.",
+                    temperature=0,
+                )
+                output_json = parse_json_from_response(raw)
+            return {"output_text": None, "output_json": output_json}
+
+        if performance_type == "document_summarization":
+            if model_name == "GPT-4.1":
+                output_text = call_azure_gpt41_summary(input_text or "", prompt, endpoint, key)
+            elif model_name == "GPT-4o-mini":
+                output_text = call_azure_gpt4o_summary(input_text or "", prompt, endpoint, key)
+            else:
+                output_text = run_azure_text_task(
+                    model_name=azure_model,
+                    endpoint=endpoint,
+                    api_key=key,
+                    api_version=azure_version,
+                    system="You are an AI that summarizes documents.",
+                    user_content=f"{prompt}\n\nDocument Content:\n{input_text or ''}\n\nProvide a clear, concise summary.",
+                    temperature=0.3,
+                    max_tokens=1500,
+                )
+            return {"output_text": output_text, "output_json": None}
+
+        if performance_type == "document_classification":
+            if model_name == "GPT-4.1":
+                output_text = call_azure_gpt41_classification(input_text or "", prompt, endpoint, key)
+            elif model_name == "GPT-4o-mini":
+                output_text = call_azure_gpt4o_classification(input_text or "", prompt, endpoint, key)
+            else:
+                output_text = run_azure_text_task(
+                    model_name=azure_model,
+                    endpoint=endpoint,
+                    api_key=key,
+                    api_version=azure_version,
+                    system="You are an AI that classifies documents.",
+                    user_content=f"{prompt}\n\nDocument Content:\n{input_text or ''}\n\nReturn only the classification label or category.",
+                    temperature=0,
+                )
+            return {"output_text": output_text, "output_json": None}
+
+        if performance_type in {"chatbot", "text_generation"}:
+            output_text = run_azure_text_task(
+                model_name=azure_model,
+                endpoint=endpoint,
+                api_key=key,
+                api_version=azure_version,
+                system="You are a helpful AI assistant.",
+                user_content=f"{prompt}\n\nUser Input:\n{input_text or ''}".strip(),
+                temperature=0.3,
+                max_tokens=1500,
+            )
+            return {"output_text": output_text, "output_json": None}
+
+    if provider == "modal":
+        if not endpoint:
+            raise HTTPException(400, "Modal endpoint URL is required.")
+        if performance_type == "ocr":
+            if not filename or not filename.lower().endswith(".pdf"):
+                extracted_text = extract_text_gpt4o(file_bytes or b"", filename or "")
+                return {"output_text": extracted_text, "output_json": None}
+            results = extract_pdf_text_with_fallback(file_bytes or b"", endpoint, model_name, prompt)
+            return {"output_text": format_page_results(results), "output_json": None}
+
+        if performance_type == "text_to_json":
+            return {
+                "output_text": None,
+                "output_json": call_modal_llm_text_to_json(input_text or "", prompt, endpoint, model_name),
+            }
+
+        if performance_type == "document_summarization":
+            return {
+                "output_text": call_modal_summary(input_text or "", endpoint, prompt, model_name),
+                "output_json": None,
+            }
+
+        if performance_type == "document_classification":
+            return {
+                "output_text": call_modal_classification(input_text or "", endpoint, prompt, model_name).strip(),
+                "output_json": None,
+            }
+
+        if performance_type in {"chatbot", "text_generation"}:
+            client = build_modal_client(endpoint, key)
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a helpful AI assistant."},
+                    {"role": "user", "content": f"{prompt}\n\nUser Input:\n{input_text or ''}".strip()},
+                ],
+                max_tokens=1500,
+                temperature=0.3,
+            )
+            return {"output_text": (response.choices[0].message.content or "").strip(), "output_json": None}
+
+    if provider == "huggingface":
+        if not endpoint:
+            raise HTTPException(400, "Hugging Face endpoint URL is required.")
+        output_text, output_json = run_hugging_face_task(
+            endpoint_url=endpoint,
+            api_key=key,
+            performance_type=performance_type,
+            prompt=prompt,
+            input_text=input_text,
+        )
+        return {"output_text": output_text, "output_json": output_json}
+
+    if provider == "other":
+        if not endpoint:
+            raise HTTPException(400, "Endpoint URL is required.")
+        output_text, output_json = run_other_provider_task(
+            endpoint_url=endpoint,
+            api_key=key,
+            performance_type=performance_type,
+            prompt=prompt,
+            input_text=input_text,
+            file_bytes=file_bytes,
+            filename=filename,
+        )
+        return {"output_text": output_text, "output_json": output_json}
+
+    raise OptionUnavailableError("This option is currently not available.")
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    user = get_current_user_or_none(request)
+    if not user:
+        return {"authenticated": False}
+    return {
+        "authenticated": True,
+        "user": {
+            "id": user["id"],
+            "username": user.get("username") or user.get("email"),
+            "name": user.get("name", ""),
+            "email": user.get("email", ""),
+            "picture": user.get("picture", ""),
+        },
+    }
+
+
+@app.post("/auth/google")
+async def auth_google(body: GoogleAuthRequest, request: Request):
+    google_user = verify_google_credential(body.credential)
+    request.session.clear()
+    request.session["auth_user"] = create_session_user(
+        google_user["email"],
+        name=google_user["name"],
+        picture=google_user["picture"],
+    )
+    return google_user
+
+
+@app.post("/auth/email")
+async def auth_email(body: EmailAuthRequest, request: Request):
+    request.session.clear()
+    session_user = create_session_user(body.email)
+    request.session["auth_user"] = session_user
+    return {
+        "name": session_user["name"],
+        "email": session_user["email"],
+        "picture": session_user["picture"],
+    }
+
+
+@app.post("/api/auth/register")
+async def auth_register(body: AuthRequest, request: Request):
+    raise HTTPException(404, "Public registration is disabled")
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: AuthRequest, request: Request):
+    raise HTTPException(404, "Use Google Sign-In")
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/models")
+async def list_models_api(request: Request):
+    require_authenticated_user(request)
+    return {"models": get_all_manager_models(), "performance_labels": PERFORMANCE_LABELS}
+
+
+@app.get("/api/models/search")
+async def search_models_api(q: str, request: Request):
+    require_authenticated_user(request)
+    model = search_manager_model(q)
+    return {"exists": bool(model), "model": model}
+
+
+@app.post("/api/models")
+async def upsert_model_api(body: ModelRegistrationRequest, request: Request):
+    user = require_authenticated_user(request)
+    provider = body.provider.strip().lower()
+    model = upsert_custom_model(
+        name=body.name.strip(),
+        provider=provider,
+        endpoint_url=body.endpoint_url,
+        api_key=body.api_key,
+        api_version=body.api_version,
+        default_prompt=body.default_prompt,
+        capabilities=body.capabilities,
+        metadata=body.metadata,
+        created_by=user["id"],
+    )
+    return {
+        "model": model_payload(
+            name=model["name"],
+            provider=model["provider"],
+            capabilities=model["capabilities"],
+            model_key=model["name"],
+            builtin=False,
+            endpoint_url=model.get("endpoint_url"),
+            default_prompt=model.get("default_prompt"),
+            api_version=model.get("api_version"),
+        )
+    }
+
+
+@app.post("/api/issues")
+async def create_issue_api(body: IssueCreateRequest, request: Request):
+    user = get_current_user_or_none(request)
+    issue = create_issue(
+        user_id=user["id"] if user else None,
+        model_name=body.model_name,
+        performance_type=body.performance_type,
+        email=body.email,
+        description=body.description,
+    )
+    return {"issue": issue}
+
+
+@app.get("/api/history")
+async def history_api(request: Request):
+    user = require_authenticated_user(request)
+    return {"runs": list_user_test_runs(user["id"])}
+
+
+@app.post("/api/execute")
+async def execute_api(
+    request: Request,
+    model_key: str = Form(""),
+    selected_options_json: str = Form(...),
+    prompt: str = Form(""),
+    input_text: str = Form(""),
+    endpoint_url: str = Form(None),
+    api_key: str = Form(None),
+    api_version: str = Form(None),
+    custom_model_name: str = Form(""),
+    custom_provider: str = Form(""),
+    custom_capabilities_json: str = Form("[]"),
+    custom_default_prompt: str = Form(""),
+    file: UploadFile = File(None),
+):
+    user = require_authenticated_user(request)
+    try:
+        selected_options = json.loads(selected_options_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, f"Invalid selected options payload: {exc}")
+    if not isinstance(selected_options, list) or not selected_options:
+        raise HTTPException(400, "At least one performance option must be selected.")
+
+    try:
+        custom_capabilities = json.loads(custom_capabilities_json or "[]")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, f"Invalid custom capabilities payload: {exc}")
+    if not isinstance(custom_capabilities, list):
+        raise HTTPException(400, "Custom capabilities must be a list.")
+
+    if (model_key or "").strip() and model_key != "__adhoc__":
+        config = get_model_runtime_config(model_key)
+    else:
+        config = build_ad_hoc_runtime_config(
+            model_name=custom_model_name,
+            provider=custom_provider,
+            capabilities=custom_capabilities,
+            endpoint_url=endpoint_url,
+            api_version=api_version,
+            default_prompt=custom_default_prompt or prompt,
+        )
+    file_bytes = await file.read() if file else None
+    filename = file.filename if file else None
+    saved_path = save_uploaded_file_for_user(user["id"], file, file_bytes) if file and file_bytes else None
+    results = []
+
+    for performance_type in selected_options:
+        start = time.perf_counter()
+        success = False
+        output_text = None
+        output_json = None
+        error_message = None
+        try:
+            execution = execute_manager_test(
+                config=config,
+                performance_type=performance_type,
+                prompt=prompt or config.get("default_prompt") or "",
+                input_text=input_text or None,
+                file_bytes=file_bytes,
+                filename=filename,
+                endpoint_url=endpoint_url,
+                api_key=api_key,
+                api_version=api_version,
+            )
+            output_text = execution.get("output_text")
+            output_json = execution.get("output_json")
+            success = True
+        except OptionUnavailableError as exc:
+            error_message = str(exc)
+        except Exception as exc:
+            error_message = str(exc)
+
+        time_taken_ms = int((time.perf_counter() - start) * 1000)
+        run = create_test_run(
+            user_id=user["id"],
+            model_id=config.get("id"),
+            model_name=config["name"],
+            provider=config["provider"],
+            performance_type=performance_type,
+            selected_options=selected_options,
+            prompt=prompt or config.get("default_prompt"),
+            input_text=input_text or None,
+            input_file_path=saved_path,
+            output_text=output_text,
+            output_json=output_json,
+            confidence=None,
+            accuracy=None,
+            time_taken_ms=time_taken_ms,
+            success=success,
+            error_message=error_message,
+            metadata={"provider": config["provider"]},
+        )
+        results.append(run)
+
+    return {"results": results}
+
+
+# ------------------------------------------------
 # Health check
 # ------------------------------------------------
 
@@ -1344,4 +2273,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

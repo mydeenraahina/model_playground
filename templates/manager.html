@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Test Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/manager.css" />
+  </head>
+  <body>
+    <div id="managerApp" class="dashboard-shell">
+      <aside class="dashboard-sidebar card-base">
+        <div>
+          <a class="dashboard-brand" href="/playground">
+            <img src="/static/download.jpg" alt="Ezofis logo" class="dashboard-brand__logo" />
+            <div>
+              <div class="dashboard-brand__title">EZOFIS AI</div>
+              <div class="dashboard-brand__subtitle">Model Testing Playground</div>
+            </div>
+          </a>
+
+          <nav class="dashboard-nav" aria-label="Primary">
+            <a id="dashboardNav" class="dashboard-nav__item is-active" href="#dashboardView">Dashboard</a>
+            <a id="historyNav" class="dashboard-nav__item" href="#historyView">History</a>
+          </nav>
+        </div>
+
+        <div class="dashboard-sidebar__footer">
+          <div class="dashboard-user">
+            {% if user.picture %}
+            <img src="{{ user.picture }}" alt="{{ user.name or user.email }}" class="dashboard-user__avatar" />
+            {% else %}
+            <div class="dashboard-user__avatar dashboard-user__avatar--fallback">
+              {{ (user.name or user.email or 'U')[:1] | upper }}
+            </div>
+            {% endif %}
+            <div class="dashboard-user__meta">
+              <div class="dashboard-user__name">{{ user.name or "Ezofis User" }}</div>
+              <div class="dashboard-user__email">{{ user.email }}</div>
+            </div>
+          </div>
+
+          <button id="logoutBtn" class="dashboard-logout" type="button">
+            <span class="dashboard-logout__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 7l5 5-5 5"></path>
+                <path d="M19 12H9"></path>
+                <path d="M11 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h5"></path>
+              </svg>
+            </span>
+            <span>Sign out</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="dashboard-main">
+        <section class="manager-header card-base" id="overviewSection">
+          <div>
+            <div class="dashboard-kicker">Internal Evaluation Workspace</div>
+            <div class="manager-header__title">Model Testing Dashboard</div>
+            <div class="subtitle">
+              Search internal models, run evaluation prompts, compare outputs, and track
+              extraction history in one place.
+            </div>
+          </div>
+        </section>
+
+        <section id="authSection" class="manager-hidden" hidden>
+          <div class="manager-auth-tabs">
+            <button type="button" class="btn-secondary is-active" id="loginModeBtn">Login</button>
+            <button type="button" class="btn-secondary" id="registerModeBtn">Register</button>
+          </div>
+          <form class="manager-form" id="authForm">
+            <label class="manager-label">
+              Username
+              <input id="authUsername" type="text" required />
+            </label>
+            <label class="manager-label" id="authEmailRow" hidden>
+              Email
+              <input id="authEmail" type="email" />
+            </label>
+            <label class="manager-label">
+              Password
+              <input id="authPassword" type="password" required />
+            </label>
+            <button class="btn-primary" type="submit" id="authSubmitBtn">Login</button>
+            <div class="manager-status" id="authStatus"></div>
+          </form>
+        </section>
+
+        <section id="dashboardView" class="dashboard-view">
+          <section class="manager-grid">
+            <section class="card-base manager-card" id="searchSection" hidden>
+              <div class="manager-card__title">Search a Model</div>
+              <div class="manager-card__subtitle">
+                Enter the model name, add your credentials, choose the test options, and run the evaluation from this one panel.
+              </div>
+              <form class="manager-form manager-search" id="searchForm">
+                <label class="manager-label manager-label--full">
+                  Model name
+                  <span class="manager-searchbox">
+                    <span class="manager-searchbox__icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="7"></circle>
+                        <path d="M20 20l-3.5-3.5"></path>
+                      </svg>
+                    </span>
+                    <input id="searchQuery" type="text" placeholder="Search or enter a new model name" required />
+                  </span>
+                </label>
+              </form>
+              <div class="manager-status" id="searchStatus"></div>
+              <div id="searchHistoryMatches" class="search-history-matches" hidden></div>
+
+              <div id="newModelSection" class="manager-card__subsection" hidden>
+                <div class="caption">Enter the model details below for this test only.</div>
+                <form class="manager-form" id="newModelForm">
+                  <label class="manager-label">
+                    Model name
+                    <input id="newModelName" type="text" required />
+                  </label>
+                  <label class="manager-label">
+                    Provider
+                    <select id="newModelProvider">
+                      <option value="azure">Azure</option>
+                      <option value="modal">Modal.com</option>
+                      <option value="huggingface">Hugging Face</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label class="manager-label">
+                    Endpoint URL
+                    <input id="newModelEndpoint" type="url" placeholder="https://..." />
+                  </label>
+                  <label class="manager-label">
+                    API key / credentials
+                    <input id="newModelApiKey" type="password" placeholder="API key or token" />
+                  </label>
+                  <label class="manager-label">
+                    API version
+                    <input id="newModelApiVersion" type="text" placeholder="Optional API version" />
+                  </label>
+                  <label class="manager-label manager-label--full">
+                    Default prompt
+                    <textarea id="newModelPrompt" rows="3" placeholder="Default prompt for testing"></textarea>
+                  </label>
+                  <label class="manager-label manager-label--full">
+                    File upload
+                    <input id="newModelFile" type="file" />
+                  </label>
+                  <div class="manager-options">
+                    <div class="caption">Testing options</div>
+                    <div id="newModelCapabilities"></div>
+                  </div>
+                  <button id="newModelRunBtn" class="btn-primary" type="submit">Run evaluation</button>
+                  <div class="manager-status" id="newModelStatus"></div>
+                </form>
+              </div>
+            </section>
+
+            <section id="dashboardShowcase" class="card-base dashboard-showcase">
+              <div class="dashboard-showcase__header">
+                <div class="dashboard-showcase__eyebrow">Have a quick test with your model</div>
+                <div class="dashboard-showcase__subtitle">
+                  Enter the model name, connect with your own credentials, add the prompt or sample file, and run a quick test from one place.
+                </div>
+              </div>
+              <div class="dashboard-showcase__grid">
+                <article class="dashboard-feature-card">
+                  <div class="dashboard-feature-card__icon dashboard-feature-card__icon--amber">⚡</div>
+                  <div class="dashboard-feature-card__title">Quick test first</div>
+                  <div class="dashboard-feature-card__text">Pick the model you want to try and run the evaluation directly without moving across multiple cards.</div>
+                </article>
+                <article class="dashboard-feature-card">
+                  <div class="dashboard-feature-card__icon dashboard-feature-card__icon--violet">✦</div>
+                  <div class="dashboard-feature-card__title">Use your credentials</div>
+                  <div class="dashboard-feature-card__text">Enter the endpoint and API credentials for the model you want to test right now.</div>
+                </article>
+                <article class="dashboard-feature-card">
+                  <div class="dashboard-feature-card__icon dashboard-feature-card__icon--green">◴</div>
+                  <div class="dashboard-feature-card__title">Reach a conclusion</div>
+                  <div class="dashboard-feature-card__text">Use the output from the current run to decide whether the model is worth taking forward.</div>
+                </article>
+              </div>
+              <div class="dashboard-formats">
+                <div class="dashboard-formats__label">Quick Workflow</div>
+                <div class="dashboard-formats__items">
+                  <span class="dashboard-format-pill">Search</span>
+                  <span class="dashboard-format-pill">Add credentials</span>
+                  <span class="dashboard-format-pill">Run test</span>
+                  <span class="dashboard-format-pill">Review output</span>
+                  <span class="dashboard-format-pill">Decide</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="card-base manager-card manager-card--wide" id="issueSection" hidden>
+            <div class="manager-card__title">Raise an Availability Request</div>
+            <div class="manager-card__subtitle">
+              Use this when a model capability is unavailable and you want it prioritized.
+            </div>
+            <form class="manager-form" id="issueForm">
+              <div class="caption" id="issueContext"></div>
+              <label class="manager-label">
+                Email
+                <input id="issueEmail" type="email" required />
+              </label>
+              <label class="manager-label manager-label--full">
+                Description
+                <textarea id="issueDescription" rows="4" required placeholder="Describe the missing feature or limitation"></textarea>
+              </label>
+              <div class="manager-inline-actions">
+                <button class="btn-primary" type="submit">Submit issue</button>
+                <button class="btn-secondary" type="button" id="cancelIssueBtn">Cancel</button>
+              </div>
+              <div class="manager-status" id="issueStatus"></div>
+            </form>
+            </section>
+
+            <section class="card-base manager-card manager-card--wide" id="latestResultsSection" hidden>
+            <div class="manager-card__title">Latest Results</div>
+            <div class="manager-card__subtitle">
+              Review outputs from the most recent test execution and copy them for sharing.
+            </div>
+            <div class="manager-results" id="latestResults"></div>
+            </section>
+          </section>
+        </section>
+
+        <section id="historyView" class="dashboard-view" hidden>
+          <section class="card-base manager-card manager-card--wide" id="historySection" hidden>
+            <div class="manager-card__title">Execution History</div>
+            <div class="manager-card__subtitle">
+              Past runs stay available here so you can compare outputs and timing over time.
+            </div>
+            <div class="history-toolbar">
+              <label class="history-toolbar__search" aria-label="Search history">
+                <span class="history-toolbar__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="7"></circle>
+                    <path d="M20 20l-3.5-3.5"></path>
+                  </svg>
+                </span>
+                <input id="historySearch" type="search" placeholder="Search by model, file, provider, or type..." />
+              </label>
+              <label class="history-toolbar__filter" aria-label="Filter by status">
+                <select id="historyStatusFilter">
+                  <option value="all">All statuses</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </label>
+              <button id="exportHistoryBtn" class="btn-primary" type="button">Export all</button>
+            </div>
+            <div class="history-stats" aria-label="History summary">
+              <article class="history-stat-card">
+                <div class="history-stat-card__label">Total Runs</div>
+                <div class="history-stat-card__value" id="historyTotalStat">0</div>
+              </article>
+              <article class="history-stat-card">
+                <div class="history-stat-card__label">Success Rate</div>
+                <div class="history-stat-card__value" id="historySuccessStat">0%</div>
+              </article>
+              <article class="history-stat-card">
+                <div class="history-stat-card__label">Avg. Processing Time</div>
+                <div class="history-stat-card__value" id="historyAvgTimeStat">0 ms</div>
+              </article>
+              <article class="history-stat-card">
+                <div class="history-stat-card__label">Fields Extracted</div>
+                <div class="history-stat-card__value" id="historyFieldsStat">0</div>
+              </article>
+            </div>
+            <div class="manager-history" id="historyList"></div>
+            <div class="caption" id="historyEmpty">No test history yet.</div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/manager.js"></script>
+  </body>
+</html>

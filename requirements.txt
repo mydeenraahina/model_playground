@@ -9,3 +9,5 @@ pandas
 openpyxl
 python-docx
 requests
+itsdangerous
+google-auth

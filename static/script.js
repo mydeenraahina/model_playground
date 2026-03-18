@@ -2,6 +2,157 @@ document.addEventListener('DOMContentLoaded', () => {
   // Fade in page once JS is ready
   document.body.classList.add('is-ready');
 
+  const googleSignInButton = document.getElementById('googleSignInButton');
+  const loginStatus = document.getElementById('loginStatus');
+  const googleHelper = document.getElementById('googleHelper');
+  const googleClientId = document.body.dataset.googleClientId;
+  const emailLoginForm = document.getElementById('emailLoginForm');
+  const emailLoginInput = document.getElementById('emailLoginInput');
+  const emailLoginButton = document.getElementById('emailLoginButton');
+  const logoutButton = document.getElementById('logoutButton');
+
+  if (googleSignInButton) {
+    function showLoginError(message) {
+      if (loginStatus) {
+        loginStatus.textContent = message;
+      } else {
+        window.alert(message);
+      }
+    }
+
+    function setEmailLoading(isLoading) {
+      if (!emailLoginButton) return;
+      emailLoginButton.disabled = isLoading;
+      emailLoginButton.textContent = isLoading ? 'Signing you in...' : 'Continue with Email';
+    }
+
+    async function handleGoogleCredential(response) {
+      if (!response?.credential) {
+        showLoginError('Google Sign-In did not return a credential.');
+        return;
+      }
+
+      if (loginStatus) loginStatus.textContent = 'Signing you in...';
+
+      try {
+        const authResponse = await fetch('/auth/google', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credential: response.credential }),
+        });
+
+        const payload = await authResponse.json().catch(() => ({}));
+        if (!authResponse.ok) {
+          throw new Error(payload?.detail || 'Access Denied');
+        }
+
+        window.location.href = '/playground';
+      } catch (error) {
+        showLoginError(String(error.message || error));
+      }
+    }
+
+    function initializeGoogleSignIn() {
+      google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: handleGoogleCredential,
+      });
+      google.accounts.id.renderButton(googleSignInButton, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'pill',
+        width: 280,
+      });
+      if (loginStatus) {
+        loginStatus.textContent = '';
+      }
+    }
+
+    async function waitForGoogleIdentity() {
+      if (!googleClientId) {
+        if (googleHelper) {
+          googleHelper.textContent = 'Google Sign-In is unavailable right now, but email sign-in still works.';
+        }
+        return;
+      }
+
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        if (window.google?.accounts?.id) {
+          initializeGoogleSignIn();
+          return;
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 250));
+      }
+
+      if (googleHelper) {
+        googleHelper.textContent = 'Google Sign-In failed to load. You can still use company email access.';
+      } else {
+        showLoginError('Google Sign-In failed to load. Check internet access, extensions, or firewall blocking Google scripts.');
+      }
+    }
+
+    if (emailLoginForm && emailLoginInput) {
+      emailLoginForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        const email = emailLoginInput.value.trim().toLowerCase();
+
+        if (!email) {
+          showLoginError('Enter your work email to continue.');
+          emailLoginInput.focus();
+          return;
+        }
+
+        setEmailLoading(true);
+        if (loginStatus) {
+          loginStatus.textContent = 'Signing you in...';
+        }
+
+        try {
+          const authResponse = await fetch('/auth/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email }),
+          });
+
+          const payload = await authResponse.json().catch(() => ({}));
+          if (!authResponse.ok) {
+            throw new Error(payload?.detail || 'Access Denied');
+          }
+
+          window.location.href = '/playground';
+        } catch (error) {
+          showLoginError(String(error.message || error));
+          setEmailLoading(false);
+        }
+      });
+    }
+
+    waitForGoogleIdentity();
+    return;
+  }
+
+  if (logoutButton) {
+    logoutButton.addEventListener('click', async () => {
+      const originalLabel = logoutButton.textContent;
+      logoutButton.disabled = true;
+      logoutButton.textContent = 'Logging out...';
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+      } catch (error) {
+        // Redirect anyway so the user can restart from login.
+      }
+      window.location.href = '/';
+      logoutButton.textContent = originalLabel;
+      logoutButton.disabled = false;
+    });
+  }
+
   const homeHero = document.getElementById('homeHero');
   const modelPage = document.getElementById('modelPage');
   const getStartedBtn = document.getElementById('getStartedBtn');

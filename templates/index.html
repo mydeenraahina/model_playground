@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ModelCraft Studio</title>
+    <title>Model Testing Playground</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -23,13 +23,14 @@
             alt="Ezofis logo"
             class="hero-logo"
           />
-          <h1 class="hero-title">Ezofis's ModelCraft Studio</h1>
+          <h1 class="hero-title">Model Testing Playground</h1>
           <p class="hero-subtitle">
             Test, compare, and fine-tune your AI models in one place.
           </p>
           <button class="btn-primary hero-button" type="button" id="getStartedBtn">
             Get started
           </button>
+          <a class="btn-secondary hero-button" href="#modelPage">Browse Models</a>
         </div>
         <div class="hero-visual">
           <div class="hero-orbit hero-orbit--primary"></div>
@@ -47,10 +48,29 @@
       <div id="modelPage" class="model-page">
         <header class="header">
           <div class="header__text">
-            <div class="page-title">ModelCraft Studio</div>
+            <div class="page-title">Model Testing Playground</div>
             <div class="subtitle">
               Test and compare vision-language models.
             </div>
+          </div>
+          <div class="header__actions">
+            <a href="#modelPage" class="btn-secondary">Models</a>
+            <div class="user-chip" aria-label="Signed in user">
+              {% if user.picture %}
+              <img src="{{ user.picture }}" alt="{{ user.name or user.email }}" class="user-chip__avatar" />
+              {% else %}
+              <div class="user-chip__avatar user-chip__avatar--fallback">
+                {{ (user.name or user.email or 'U')[:1] | upper }}
+              </div>
+              {% endif %}
+              <div class="user-chip__meta">
+                <div class="user-chip__name">{{ user.name or "Ezofis User" }}</div>
+                <div class="user-chip__email">{{ user.email }}</div>
+              </div>
+            </div>
+            <button id="logoutButton" class="btn-secondary btn-secondary--danger" type="button">
+              Logout
+            </button>
           </div>
         </header>
 

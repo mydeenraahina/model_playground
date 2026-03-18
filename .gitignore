@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 *.pdf
 .env
+modelcraft.db
+modelcraft.db
+*.db
+.env
+
+
