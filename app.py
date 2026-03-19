@@ -10,7 +10,7 @@ import fitz
 import requests
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +19,6 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from openai import AzureOpenAI, OpenAI
 from pydantic import BaseModel
 from manager_db import (
     create_issue,
@@ -29,7 +28,7 @@ from manager_db import (
     get_user_by_username,
     init_db,
     list_custom_models,
-    list_user_test_runs,
+    list_test_runs,
     upsert_custom_model,
 )
 
@@ -238,14 +237,9 @@ def has_meaningful_pdf_text(text: str, min_chars: int = 20) -> bool:
 
 
 def call_modal_vision(image_base64: str, prompt: str, modal_url: str, model_name: str):
-
-    client = OpenAI(
-        api_key="modal",
-        base_url=modal_url.rstrip("/") + "/v1"
-    )
-
-    response = client.chat.completions.create(
-        model=model_name,
+    response_text = call_openai_compatible_chat_completion(
+        endpoint_url=modal_url,
+        model_name=model_name,
         messages=[
             {
                 "role": "user",
@@ -260,10 +254,11 @@ def call_modal_vision(image_base64: str, prompt: str, modal_url: str, model_name
                 ],
             }
         ],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=4096,
     )
-
-    return response.choices[0].message.content or ""
+    return response_text or ""
 
 
 def extract_pdf_text_with_fallback(
@@ -310,19 +305,15 @@ def pdf_to_text(pdf_bytes: bytes) -> str:
 
 def query_vllm_qwen(extracted_text: str, user_prompt: str, vllm_url: str) -> str:
     """Send extracted text + prompt to Modal vLLM endpoint (OpenAI-compatible API)."""
-    from openai import OpenAI
-
-    full_prompt = f"Text extracted from PDF:\n{extracted_text}\n\nPrompt: {user_prompt}"
-    base_url = vllm_url.strip().rstrip("/")
-    if not base_url.endswith("/v1"):
-        base_url = base_url + "/v1"
-    client = OpenAI(api_key="modal", base_url=base_url)
-    response = client.chat.completions.create(
-        model=QWEN_MODEL_NAME,
+    full_prompt = build_text_task_prompt("text_generation", extracted_text, user_prompt)
+    return call_openai_compatible_chat_completion(
+        endpoint_url=vllm_url,
+        model_name=QWEN_MODEL_NAME,
         messages=[{"role": "user", "content": full_prompt}],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=1024,
     )
-    return response.choices[0].message.content or ""
 
 
 def run_ocr_qwen(pdf_bytes: bytes, vllm_url: str, prompt: str) -> list[tuple[int, str]]:
@@ -339,6 +330,69 @@ def format_page_results(results: list[tuple[int, str]]) -> str:
     return "\n\n".join(parts)
 
 
+def extract_clean_document_text(
+    *,
+    file_bytes: bytes,
+    filename: str,
+    provider: str,
+    endpoint_url: str | None = None,
+    api_key: str | None = None,
+    model_name: str | None = None,
+    api_version: str | None = None,
+    ocr_prompt: str | None = None,
+) -> str:
+    normalized_name = (filename or "").lower()
+    if not normalized_name.endswith(".pdf"):
+        return extract_text_gpt4o(file_bytes, filename).strip()
+
+    searchable_pages = list(pdf_pages_to_text(file_bytes))
+    if searchable_pages and all(has_meaningful_pdf_text(text) for _, text in searchable_pages):
+        return format_page_results(
+            [
+                (page_index, (text or "").strip())
+                for page_index, text in searchable_pages
+                if (text or "").strip()
+            ]
+        )
+
+    final_ocr_prompt = build_task_instruction("ocr", ocr_prompt)
+    if provider == "modal":
+        if not endpoint_url:
+            raise HTTPException(400, "Modal endpoint URL is required.")
+        return format_page_results(
+            extract_pdf_text_with_fallback(
+                file_bytes, endpoint_url, model_name or EZOFIS_MODEL_NAME, final_ocr_prompt
+            )
+        )
+
+    if provider == "azure":
+        if not endpoint_url or not api_key:
+            raise HTTPException(400, "Azure endpoint and API key are required.")
+        return run_azure_ocr_generic(
+            model_name=model_name or GPT4O_MODEL_NAME,
+            endpoint=endpoint_url,
+            api_key=api_key,
+            api_version=api_version or AZURE_OPENAI_API_VERSION_GPT4O,
+            prompt=final_ocr_prompt,
+            file_bytes=file_bytes,
+            filename=filename,
+        )
+
+    partial_text = format_page_results(
+        [
+            (page_index, (text or "").strip())
+            for page_index, text in searchable_pages
+            if (text or "").strip()
+        ]
+    )
+    if partial_text:
+        return partial_text
+    raise HTTPException(
+        400,
+        "Scanned PDFs require an OCR-capable Azure or Modal configuration to extract text.",
+    )
+
+
 # ------------------------------------------------
 # GPT-4o-mini (Azure OpenAI) Helpers
 # ------------------------------------------------
@@ -353,6 +407,198 @@ AZURE_OPENAI_API_VERSION_GPT4O = os.environ.get("AZURE_OPENAI_API_VERSION_GPT4O"
 AZURE_OPENAI_API_VERSION_GPT41 = os.environ.get("AZURE_OPENAI_API_VERSION_GPT41", "2024-02-15-preview")
 
 GPT4O_SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xls", ".md", ".txt"}
+
+TASK_DEFAULT_INSTRUCTIONS = {
+    "ocr": "Extract all readable text from the document.",
+    "document_summarization": "Summarize the content concisely.",
+    "document_classification": "Classify the document and return the result in JSON format.",
+    "text_to_json": "Extract structured data and return valid JSON.",
+    "chatbot": "Answer clearly using the provided content only.",
+    "text_generation": "Generate a clear and relevant response for the provided content.",
+}
+
+
+def build_task_instruction(task_type: str, user_prompt: str | None = None) -> str:
+    default_instruction = TASK_DEFAULT_INSTRUCTIONS.get(task_type, "").strip()
+    additional_instruction = (user_prompt or "").strip()
+    if not default_instruction:
+        return additional_instruction
+    if not additional_instruction:
+        return default_instruction
+    if additional_instruction.casefold() == default_instruction.casefold():
+        return default_instruction
+    return f"{default_instruction}\n\nAdditional instructions:\n{additional_instruction}"
+
+
+def build_text_task_prompt(task_type: str, text: str, user_prompt: str | None = None) -> str:
+    instruction = build_task_instruction(task_type, user_prompt)
+    payload_label = "Text" if task_type == "text_to_json" else "Document Content"
+    if task_type in {"chatbot", "text_generation"}:
+        payload_label = "User Input"
+    sections = [instruction]
+    if text.strip():
+        sections.append(f"{payload_label}:\n{text.strip()}")
+    return "\n\n".join(section for section in sections if section).strip()
+
+
+def extract_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")).strip())
+        return "\n".join(part for part in parts if part).strip()
+    return str(content or "").strip()
+
+
+def provider_error_detail(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return (response.text or f"HTTP {response.status_code}").strip()
+    if isinstance(payload, dict):
+        detail = payload.get("error") or payload.get("detail") or payload.get("message")
+        if isinstance(detail, dict):
+            return json.dumps(detail)
+        if detail:
+            return str(detail)
+    return json.dumps(payload) if not isinstance(payload, str) else payload
+
+
+def post_json_request(
+    *,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    provider_name: str,
+    timeout: int = 60,
+) -> Any:
+    response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    if not response.ok:
+        raise HTTPException(
+            response.status_code,
+            f"{provider_name} request failed: {provider_error_detail(response)}",
+        )
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise HTTPException(502, f"{provider_name} returned a non-JSON response.") from exc
+
+
+def extract_chat_response_text(data: dict[str, Any], provider_name: str) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise HTTPException(502, f"{provider_name} response did not include any choices.")
+    message = choices[0].get("message", {})
+    return extract_message_text(message.get("content"))
+
+
+def build_openai_compatible_chat_url(endpoint_url: str) -> str:
+    endpoint = endpoint_url.strip().rstrip("/")
+    if endpoint.endswith("/chat/completions"):
+        return endpoint
+    if endpoint.endswith("/v1"):
+        return endpoint + "/chat/completions"
+    return endpoint + "/v1/chat/completions"
+
+
+def build_azure_chat_completion_url(
+    endpoint: str | None, deployment_name: str, api_version: str
+) -> str:
+    ep = (endpoint or "").strip() or AZURE_OPENAI_ENDPOINT
+    if not ep:
+        raise HTTPException(400, "Azure OpenAI Endpoint is required.")
+    parsed = urlsplit(ep)
+    if not parsed.scheme or not parsed.netloc:
+        raise HTTPException(400, "Azure OpenAI Endpoint must be a valid URL.")
+
+    path = parsed.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query["api-version"] = api_version
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, path, urlencode(query), "")
+        )
+
+    if "/openai/deployments/" in path:
+        path = path + "/chat/completions"
+    else:
+        path = f"{path}/openai/deployments/{deployment_name}/chat/completions"
+
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            path,
+            urlencode({"api-version": api_version}),
+            "",
+        )
+    )
+
+
+def call_openai_compatible_chat_completion(
+    *,
+    endpoint_url: str,
+    model_name: str,
+    messages: list[dict[str, Any]],
+    api_key: str | None,
+    provider_name: str,
+    temperature: float = 0,
+    max_tokens: int | None = None,
+) -> str:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    data = post_json_request(
+        url=build_openai_compatible_chat_url(endpoint_url),
+        headers=headers,
+        payload=payload,
+        provider_name=provider_name,
+    )
+    return extract_chat_response_text(data, provider_name)
+
+
+def call_azure_chat_completion(
+    *,
+    model_name: str,
+    messages: list[dict[str, Any]],
+    endpoint: str | None,
+    api_key: str | None,
+    api_version: str,
+    temperature: float = 0,
+    max_tokens: int | None = None,
+) -> str:
+    key = get_azure_api_key(api_key)
+    headers = {"Content-Type": "application/json", "api-key": key}
+    payload: dict[str, Any] = {"messages": messages, "temperature": temperature}
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    data = post_json_request(
+        url=build_azure_chat_completion_url(endpoint, model_name, api_version),
+        headers=headers,
+        payload=payload,
+        provider_name="Azure",
+    )
+    return extract_chat_response_text(data, "Azure")
+
+
+def build_hugging_face_url(model_name: str, endpoint_url: str | None = None) -> str:
+    endpoint = (endpoint_url or "").strip()
+    if endpoint:
+        return endpoint
+    normalized_name = model_name.strip()
+    if not normalized_name:
+        raise HTTPException(400, "Hugging Face model name is required.")
+    return f"https://api-inference.huggingface.co/models/{quote(normalized_name, safe='/')}"
 
 
 def extract_text_gpt4o(file_bytes: bytes, filename: str) -> str:
@@ -388,40 +634,18 @@ def call_azure_gpt4o(
     api_key: str | None = None,
 ) -> str:
     """Call Azure OpenAI GPT-4o-mini. Uses endpoint/api_key from request, or env vars as fallback."""
-    ep = (endpoint or "").strip() or AZURE_OPENAI_ENDPOINT
-    key = (api_key or "").strip() or AZURE_OPENAI_API_KEY
-    if not key:
-        raise HTTPException(
-            400,
-            "Azure OpenAI API key is required. Provide it in the form or set AZURE_OPENAI_API_KEY.",
-        )
-    if not ep:
-        raise HTTPException(400, "Azure OpenAI Endpoint is required.")
-    headers = {"Content-Type": "application/json", "api-key": key}
-    payload = {
-        "messages": [
+    return call_azure_chat_completion(
+        model_name=GPT4O_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT4O,
+        messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.2,
-        "max_tokens": 800,
-    }
-    resp = requests.post(ep, headers=headers, json=payload, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
-
-
-def normalize_azure_endpoint(endpoint: str | None) -> str:
-    ep = (endpoint or "").strip() or AZURE_OPENAI_ENDPOINT
-    if not ep:
-        raise HTTPException(400, "Azure OpenAI Endpoint is required.")
-    if "/openai/" in ep:
-        ep = ep.split("/openai/", 1)[0]
-    parsed = urlsplit(ep)
-    if not parsed.scheme or not parsed.netloc:
-        raise HTTPException(400, "Azure OpenAI Endpoint must be a valid URL.")
-    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        temperature=0.2,
+        max_tokens=800,
+    )
 
 
 def get_azure_api_key(api_key: str | None) -> str:
@@ -432,18 +656,6 @@ def get_azure_api_key(api_key: str | None) -> str:
             "Azure OpenAI API key is required. Provide it in the form or set AZURE_OPENAI_API_KEY.",
         )
     return key
-
-
-def build_azure_openai_client(
-    endpoint: str | None,
-    api_key: str | None,
-    api_version: str = AZURE_OPENAI_API_VERSION,
-) -> AzureOpenAI:
-    return AzureOpenAI(
-        api_key=get_azure_api_key(api_key),
-        azure_endpoint=normalize_azure_endpoint(endpoint),
-        api_version=api_version,
-    )
 
 
 def extract_pdf_content_gpt41(pdf_bytes: bytes) -> tuple[str, list[str]]:
@@ -518,7 +730,6 @@ def run_ocr_gpt41(
     if not text and not images:
         return "(No text extracted)"
 
-    client = build_azure_openai_client(endpoint, api_key)
     content = [{"type": "text", "text": prompt}]
 
     if text:
@@ -532,15 +743,18 @@ def run_ocr_gpt41(
             }
         )
 
-    response = client.chat.completions.create(
-        model=GPT41_MODEL_NAME,
+    response_text = call_azure_chat_completion(
+        model_name=GPT41_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT41,
         messages=[
             {"role": "system", "content": "You are a document processing assistant."},
             {"role": "user", "content": content},
         ],
         max_tokens=2000,
     )
-    return (response.choices[0].message.content or "").strip() or "(No text extracted)"
+    return response_text.strip() or "(No text extracted)"
 
 
 def run_ocr_gpt4o(
@@ -561,9 +775,6 @@ def run_ocr_gpt4o(
     if not text and not images:
         return "(No text extracted)"
 
-    client = build_azure_openai_client(
-        endpoint, api_key, api_version=AZURE_OPENAI_API_VERSION_GPT4O
-    )
     content = []
 
     if text:
@@ -578,15 +789,18 @@ def run_ocr_gpt4o(
         )
 
     full_prompt = f"{prompt}\nExtract text from the document content below."
-    response = client.chat.completions.create(
-        model=GPT4O_MODEL_NAME,
+    response_text = call_azure_chat_completion(
+        model_name=GPT4O_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT4O,
         messages=[
             {"role": "system", "content": "You are an OCR assistant."},
             {"role": "user", "content": [{"type": "text", "text": full_prompt}, *content]},
         ],
         temperature=0,
     )
-    return (response.choices[0].message.content or "").strip() or "(No text extracted)"
+    return response_text.strip() or "(No text extracted)"
 
 
 # ------------------------------------------------
@@ -624,22 +838,16 @@ async def ocr_pdf(
                 f"{model} supports: {', '.join(GPT4O_SUPPORTED_EXTENSIONS)}",
             )
         try:
-            if model == "gpt41":
-                text = run_ocr_gpt41(
-                    file_bytes,
-                    filename,
-                    prompt,
-                    endpoint=azure_endpoint,
-                    api_key=azure_api_key,
-                )
-            else:
-                text = run_ocr_gpt4o(
-                    file_bytes,
-                    filename,
-                    prompt,
-                    endpoint=azure_endpoint,
-                    api_key=azure_api_key,
-                )
+            text = extract_clean_document_text(
+                file_bytes=file_bytes,
+                filename=filename,
+                provider="azure",
+                endpoint_url=azure_endpoint,
+                api_key=azure_api_key,
+                model_name=GPT41_MODEL_NAME if model == "gpt41" else GPT4O_MODEL_NAME,
+                api_version=AZURE_OPENAI_API_VERSION_GPT41 if model == "gpt41" else AZURE_OPENAI_API_VERSION_GPT4O,
+                ocr_prompt=prompt,
+            )
         except Exception as e:
             raise HTTPException(500, str(e))
         return OcrResponse(text=text or "(No text extracted)", pages=1)
@@ -652,18 +860,17 @@ async def ocr_pdf(
 
     modal_url = modal_url.strip()
     try:
-        if model == "qwen":
-            results = run_ocr_qwen(file_bytes, modal_url, prompt)
-        elif model == "hunyuan":
-            results = run_ocr(file_bytes, modal_url, prompt, model_name=HUNYUAN_MODEL_NAME)
-        else:
-            results = run_ocr(file_bytes, modal_url, prompt)
+        text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider="modal",
+            endpoint_url=modal_url,
+            model_name=QWEN_MODEL_NAME if model == "qwen" else HUNYUAN_MODEL_NAME if model == "hunyuan" else EZOFIS_MODEL_NAME,
+            ocr_prompt=prompt,
+        )
     except Exception as e:
         raise HTTPException(500, str(e))
-
-    full_text = format_page_results(results)
-
-    return OcrResponse(text=full_text, pages=len(results))
+    return OcrResponse(text=text or "(No text extracted)", pages=1)
 
 
 # ------------------------------------------------
@@ -693,6 +900,25 @@ def parse_json_from_response(raw: str):
     return json.loads(raw)
 
 
+def parse_classification_from_response(raw: str) -> str:
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return ""
+    try:
+        parsed = parse_json_from_response(cleaned)
+    except json.JSONDecodeError:
+        return cleaned
+    if isinstance(parsed, dict):
+        for key in ("document_type", "classification", "label", "category", "result", "type"):
+            value = parsed.get(key)
+            if value not in (None, ""):
+                return value if isinstance(value, str) else json.dumps(value)
+        return json.dumps(parsed)
+    if isinstance(parsed, list):
+        return json.dumps(parsed)
+    return str(parsed)
+
+
 def call_modal_llm_text_to_json(
     text: str,
     prompt: str,
@@ -700,55 +926,31 @@ def call_modal_llm_text_to_json(
     model_name: str = EZOFIS_MODEL_NAME,
 ):
     """Text to JSON via OpenAI-compatible API."""
-    base = modal_url.strip().rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    client = OpenAI(api_key="modal", base_url=base)
-    combined_prompt = f"""
-{prompt}
-
-Return ONLY valid JSON.
-Do not include explanations.
-Do not wrap JSON in markdown.
-
-Text:
-{text}
-"""
-    response = client.chat.completions.create(
-        model=model_name,
+    combined_prompt = build_text_task_prompt("text_to_json", text, prompt)
+    raw = call_openai_compatible_chat_completion(
+        endpoint_url=modal_url,
+        model_name=model_name,
         messages=[{"role": "user", "content": combined_prompt}],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=4096,
         temperature=0,
     )
-    raw = response.choices[0].message.content or ""
     return parse_json_from_response(raw)
 
 
 def call_modal_qwen_text_to_json(text: str, prompt: str, modal_url: str):
     """Qwen: Text to JSON via vLLM (OpenAI-compatible API) with JSON extraction prompt."""
-    from openai import OpenAI
-
-    full_prompt = f"""You are a JSON extraction assistant.
-Analyze the following text and extract the information requested in the prompt.
-Return ONLY valid JSON, no extra text.
-
-PDF Text:
-{text}
-
-Instruction:
-{prompt}
-"""
-    base = modal_url.strip().rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    client = OpenAI(api_key="modal", base_url=base)
-    response = client.chat.completions.create(
-        model=QWEN_MODEL_NAME,
+    full_prompt = build_text_task_prompt("text_to_json", text, prompt)
+    raw = call_openai_compatible_chat_completion(
+        endpoint_url=modal_url,
+        model_name=QWEN_MODEL_NAME,
         messages=[{"role": "user", "content": full_prompt}],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=1024,
         temperature=0,
     )
-    raw = response.choices[0].message.content or ""
     try:
         return parse_json_from_response(raw)
     except json.JSONDecodeError:
@@ -764,19 +966,12 @@ def call_azure_gpt4o_text_to_json(
     text: str, prompt: str, endpoint: str | None = None, api_key: str | None = None
 ) -> dict:
     """GPT-4o-mini: Text to JSON via Azure OpenAI."""
-    client = build_azure_openai_client(
-        endpoint, api_key, api_version=AZURE_OPENAI_API_VERSION_GPT4O
-    )
-    full_prompt = f"""
-{prompt}
-
-Input Text:
-{text}
-
-Return the output strictly in JSON format.
-""".strip()
-    response = client.chat.completions.create(
-        model=GPT4O_MODEL_NAME,
+    full_prompt = build_text_task_prompt("text_to_json", text, prompt)
+    raw = call_azure_chat_completion(
+        model_name=GPT4O_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT4O,
         messages=[
             {
                 "role": "system",
@@ -786,7 +981,7 @@ Return the output strictly in JSON format.
         ],
         temperature=0,
     )
-    raw = (response.choices[0].message.content or "").strip()
+    raw = raw.strip()
     try:
         return parse_json_from_response(raw)
     except json.JSONDecodeError:
@@ -801,17 +996,12 @@ def call_azure_gpt41_text_to_json(
     text: str, prompt: str, endpoint: str | None = None, api_key: str | None = None
 ) -> dict:
     """GPT-4.1: Text to JSON via Azure OpenAI."""
-    client = build_azure_openai_client(endpoint, api_key)
-    full_prompt = f"""
-{prompt}
-
-Input Text:
-{text}
-
-Return the output strictly in JSON format.
-""".strip()
-    response = client.chat.completions.create(
-        model=GPT41_MODEL_NAME,
+    full_prompt = build_text_task_prompt("text_to_json", text, prompt)
+    raw = call_azure_chat_completion(
+        model_name=GPT41_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT41,
         messages=[
             {
                 "role": "system",
@@ -821,7 +1011,7 @@ Return the output strictly in JSON format.
         ],
         temperature=0,
     )
-    raw = (response.choices[0].message.content or "").strip()
+    raw = raw.strip()
     try:
         return parse_json_from_response(raw)
     except json.JSONDecodeError:
@@ -895,7 +1085,15 @@ async def extract_json_from_pdf(
         ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if ext not in GPT4O_SUPPORTED_EXTENSIONS:
             raise HTTPException(400, f"{model} supports: {', '.join(GPT4O_SUPPORTED_EXTENSIONS)}")
-        extracted_text = extract_text_gpt4o(file_bytes, filename)
+        extracted_text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider="azure",
+            endpoint_url=azure_endpoint,
+            api_key=azure_api_key,
+            model_name=GPT41_MODEL_NAME if model == "gpt41" else GPT4O_MODEL_NAME,
+            api_version=AZURE_OPENAI_API_VERSION_GPT41 if model == "gpt41" else AZURE_OPENAI_API_VERSION_GPT4O,
+        )
         try:
             if model == "gpt41":
                 return call_azure_gpt41_text_to_json(
@@ -917,12 +1115,13 @@ async def extract_json_from_pdf(
     if not modal_url:
         raise HTTPException(400, "Model URL is required for EZOFIS, Qwen, and Hunyuan")
     try:
-        results = extract_pdf_text_with_fallback(
-            file_bytes,
-            modal_url,
-            QWEN_MODEL_NAME if model == "qwen" else HUNYUAN_MODEL_NAME if model == "hunyuan" else EZOFIS_MODEL_NAME,
+        extracted_text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider="modal",
+            endpoint_url=modal_url,
+            model_name=QWEN_MODEL_NAME if model == "qwen" else HUNYUAN_MODEL_NAME if model == "hunyuan" else EZOFIS_MODEL_NAME,
         )
-        extracted_text = format_page_results(results)
         if model == "qwen":
             return call_modal_qwen_text_to_json(extracted_text, prompt, modal_url)
         if model == "hunyuan":
@@ -956,108 +1155,68 @@ def call_modal_summary(
     model_name: str = EZOFIS_MODEL_NAME,
 ):
     """Summarization via OpenAI-compatible API."""
-    base = modal_url.strip().rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    client = OpenAI(api_key="modal", base_url=base)
-    if prompt is None:
-        prompt = "Summarize the following document clearly and concisely."
-    combined_prompt = f"""
-{prompt}
-
-Document:
-{text}
-"""
-    response = client.chat.completions.create(
-        model=model_name,
+    combined_prompt = build_text_task_prompt("document_summarization", text, prompt)
+    return call_openai_compatible_chat_completion(
+        endpoint_url=modal_url,
+        model_name=model_name,
         messages=[{"role": "user", "content": combined_prompt}],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=2048,
         temperature=0.3,
     )
-    return response.choices[0].message.content or ""
 
 
 def call_modal_qwen_summary(text: str, modal_url: str, prompt: str | None):
     """Qwen: Summarization via vLLM with JSON extraction-style prompt."""
-    from openai import OpenAI
-
-    if prompt is None:
-        prompt = "Summarize the following document clearly and concisely."
-    full_prompt = f"""You are a text summarization assistant.
-Analyze the following text and summarize it according to the instructions.
-Return ONLY the summarized text.
-
-Text:
-{text}
-
-Instruction:
-{prompt}
-"""
-    base = modal_url.strip().rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    client = OpenAI(api_key="modal", base_url=base)
-    response = client.chat.completions.create(
-        model=QWEN_MODEL_NAME,
+    full_prompt = build_text_task_prompt("document_summarization", text, prompt)
+    return call_openai_compatible_chat_completion(
+        endpoint_url=modal_url,
+        model_name=QWEN_MODEL_NAME,
         messages=[{"role": "user", "content": full_prompt}],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=1024,
         temperature=0.3,
-    )
-    return (response.choices[0].message.content or "").strip()
+    ).strip()
 
 
 def call_azure_gpt4o_summary(
     text: str, prompt: str | None, endpoint: str | None = None, api_key: str | None = None
 ) -> str:
     """GPT-4o-mini: Summarization via Azure OpenAI."""
-    client = build_azure_openai_client(
-        endpoint, api_key, api_version=AZURE_OPENAI_API_VERSION_GPT4O
-    )
-    if prompt is None:
-        prompt = "Summarize the following document clearly and concisely."
-    full_prompt = f"""Document Content:
-{text}
-
-Task:
-{prompt}
-
-Provide a clear, concise summary."""
-    response = client.chat.completions.create(
-        model=GPT4O_MODEL_NAME,
+    full_prompt = build_text_task_prompt("document_summarization", text, prompt)
+    return call_azure_chat_completion(
+        model_name=GPT4O_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT4O,
         messages=[
             {"role": "system", "content": "You are an AI that summarizes documents."},
             {"role": "user", "content": full_prompt},
         ],
         temperature=0.3,
         max_tokens=1500,
-    )
-    return (response.choices[0].message.content or "").strip()
+    ).strip()
 
 
 def call_azure_gpt41_summary(
     text: str, prompt: str | None, endpoint: str | None = None, api_key: str | None = None
 ) -> str:
     """GPT-4.1: Summarization via Azure OpenAI."""
-    client = build_azure_openai_client(endpoint, api_key)
-    if prompt is None:
-        prompt = "Summarize the following document clearly and concisely."
-    full_prompt = f"""Document Content:
-{text}
-
-Task:
-{prompt}
-
-Generate a clear and concise summary."""
-    response = client.chat.completions.create(
-        model=GPT41_MODEL_NAME,
+    full_prompt = build_text_task_prompt("document_summarization", text, prompt)
+    return call_azure_chat_completion(
+        model_name=GPT41_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT41,
         messages=[
             {"role": "system", "content": "You are an AI assistant that summarizes documents."},
             {"role": "user", "content": full_prompt},
         ],
         temperature=0.3,
         max_tokens=1500,
-    )
-    return (response.choices[0].message.content or "").strip()
+    ).strip()
 
 
 # ------------------------------------------------
@@ -1118,10 +1277,15 @@ async def summarize_from_pdf(
         ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if ext not in GPT4O_SUPPORTED_EXTENSIONS:
             raise HTTPException(400, f"{model} supports: {', '.join(GPT4O_SUPPORTED_EXTENSIONS)}")
-        if model == "gpt41" and ext == ".pdf":
-            extracted_text = extract_text_from_pdf_bytes(file_bytes)
-        else:
-            extracted_text = extract_text_gpt4o(file_bytes, filename)
+        extracted_text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider="azure",
+            endpoint_url=azure_endpoint,
+            api_key=azure_api_key,
+            model_name=GPT41_MODEL_NAME if model == "gpt41" else GPT4O_MODEL_NAME,
+            api_version=AZURE_OPENAI_API_VERSION_GPT41 if model == "gpt41" else AZURE_OPENAI_API_VERSION_GPT4O,
+        )
         try:
             if model == "gpt41":
                 summary = call_azure_gpt41_summary(
@@ -1143,12 +1307,13 @@ async def summarize_from_pdf(
     if not modal_url:
         raise HTTPException(400, "Model URL is required for EZOFIS, Qwen, and Hunyuan")
     try:
-        results = extract_pdf_text_with_fallback(
-            file_bytes,
-            modal_url,
-            QWEN_MODEL_NAME if model == "qwen" else HUNYUAN_MODEL_NAME if model == "hunyuan" else EZOFIS_MODEL_NAME,
+        extracted_text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider="modal",
+            endpoint_url=modal_url,
+            model_name=QWEN_MODEL_NAME if model == "qwen" else HUNYUAN_MODEL_NAME if model == "hunyuan" else EZOFIS_MODEL_NAME,
         )
-        extracted_text = format_page_results(results)
         if model == "qwen":
             summary = call_modal_qwen_summary(extracted_text, modal_url, user_prompt)
         elif model == "hunyuan":
@@ -1182,108 +1347,70 @@ def call_modal_classification(
     model_name: str = EZOFIS_MODEL_NAME,
 ):
     """Classification via OpenAI-compatible API."""
-    base = modal_url.strip().rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    client = OpenAI(api_key="modal", base_url=base)
-    if prompt is None:
-        prompt = "Classify the type of document and return only the document type."
-    combined_prompt = f"""
-{prompt}
-
-Document content:
-{text}
-"""
-    response = client.chat.completions.create(
-        model=model_name,
+    combined_prompt = build_text_task_prompt("document_classification", text, prompt)
+    raw = call_openai_compatible_chat_completion(
+        endpoint_url=modal_url,
+        model_name=model_name,
         messages=[{"role": "user", "content": combined_prompt}],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=512,
         temperature=0,
     )
-    return response.choices[0].message.content or ""
+    return parse_classification_from_response(raw)
 
 
 def call_modal_qwen_classification(text: str, modal_url: str, prompt: str | None):
     """Qwen: Classification via vLLM with document classification prompt."""
-    from openai import OpenAI
-
-    if prompt is None:
-        prompt = "Classify the type of document and return only the document type."
-    full_prompt = f"""You are a document classification assistant.
-Analyze the following text and classify it according to the instructions.
-Return ONLY the classification result.
-
-Text:
-{text}
-
-Instruction:
-{prompt}
-"""
-    base = modal_url.strip().rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    client = OpenAI(api_key="modal", base_url=base)
-    response = client.chat.completions.create(
-        model=QWEN_MODEL_NAME,
+    full_prompt = build_text_task_prompt("document_classification", text, prompt)
+    raw = call_openai_compatible_chat_completion(
+        endpoint_url=modal_url,
+        model_name=QWEN_MODEL_NAME,
         messages=[{"role": "user", "content": full_prompt}],
+        api_key=None,
+        provider_name="Modal",
         max_tokens=256,
         temperature=0,
     )
-    return (response.choices[0].message.content or "").strip()
+    return parse_classification_from_response(raw)
 
 
 def call_azure_gpt4o_classification(
     text: str, prompt: str | None, endpoint: str | None = None, api_key: str | None = None
 ) -> str:
     """GPT-4o-mini: Classification via Azure OpenAI."""
-    client = build_azure_openai_client(
-        endpoint, api_key, api_version=AZURE_OPENAI_API_VERSION_GPT4O
-    )
-    if prompt is None:
-        prompt = "Classify the type of document and return only the document type."
-    full_prompt = f"""
-{prompt}
-
-Document Content:
-{text}
-
-Return only the classification label or category.
-""".strip()
-    response = client.chat.completions.create(
-        model=GPT4O_MODEL_NAME,
+    full_prompt = build_text_task_prompt("document_classification", text, prompt)
+    raw = call_azure_chat_completion(
+        model_name=GPT4O_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT4O,
         messages=[
             {"role": "system", "content": "You are an AI that classifies documents."},
             {"role": "user", "content": full_prompt},
         ],
         temperature=0,
     )
-    return (response.choices[0].message.content or "").strip()
+    return parse_classification_from_response(raw)
 
 
 def call_azure_gpt41_classification(
     text: str, prompt: str | None, endpoint: str | None = None, api_key: str | None = None
 ) -> str:
     """GPT-4.1: Classification via Azure OpenAI."""
-    client = build_azure_openai_client(endpoint, api_key)
-    if prompt is None:
-        prompt = "Classify the type of document and return only the document type."
-    full_prompt = f"""
-{prompt}
-
-Document Content:
-{text}
-
-Return only the classification result.
-""".strip()
-    response = client.chat.completions.create(
-        model=GPT41_MODEL_NAME,
+    full_prompt = build_text_task_prompt("document_classification", text, prompt)
+    raw = call_azure_chat_completion(
+        model_name=GPT41_MODEL_NAME,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=AZURE_OPENAI_API_VERSION_GPT41,
         messages=[
             {"role": "system", "content": "You are an AI that classifies documents."},
             {"role": "user", "content": full_prompt},
         ],
         temperature=0,
     )
-    return (response.choices[0].message.content or "").strip()
+    return parse_classification_from_response(raw)
 
 
 # ------------------------------------------------
@@ -1348,7 +1475,15 @@ async def classify_from_pdf(
         ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if ext not in GPT4O_SUPPORTED_EXTENSIONS:
             raise HTTPException(400, f"{model} supports: {', '.join(GPT4O_SUPPORTED_EXTENSIONS)}")
-        extracted_text = extract_text_gpt4o(file_bytes, filename)
+        extracted_text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider="azure",
+            endpoint_url=azure_endpoint,
+            api_key=azure_api_key,
+            model_name=GPT41_MODEL_NAME if model == "gpt41" else GPT4O_MODEL_NAME,
+            api_version=AZURE_OPENAI_API_VERSION_GPT41 if model == "gpt41" else AZURE_OPENAI_API_VERSION_GPT4O,
+        )
         try:
             if model == "gpt41":
                 doc_type = call_azure_gpt41_classification(
@@ -1370,12 +1505,13 @@ async def classify_from_pdf(
     if not modal_url:
         raise HTTPException(400, "Model URL is required for EZOFIS, Qwen, and Hunyuan")
     try:
-        results = extract_pdf_text_with_fallback(
-            file_bytes,
-            modal_url,
-            QWEN_MODEL_NAME if model == "qwen" else HUNYUAN_MODEL_NAME if model == "hunyuan" else EZOFIS_MODEL_NAME,
+        extracted_text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider="modal",
+            endpoint_url=modal_url,
+            model_name=QWEN_MODEL_NAME if model == "qwen" else HUNYUAN_MODEL_NAME if model == "hunyuan" else EZOFIS_MODEL_NAME,
         )
-        extracted_text = format_page_results(results)
         if model == "qwen":
             doc_type = call_modal_qwen_classification(extracted_text, modal_url, user_prompt)
         elif model == "hunyuan":
@@ -1408,7 +1544,15 @@ async def chat_with_document(
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in GPT4O_SUPPORTED_EXTENSIONS:
         raise HTTPException(400, f"Supported formats: {', '.join(GPT4O_SUPPORTED_EXTENSIONS)}")
-    extracted_text = extract_text_gpt4o(file_bytes, filename)
+    extracted_text = extract_clean_document_text(
+        file_bytes=file_bytes,
+        filename=filename,
+        provider="azure",
+        endpoint_url=azure_endpoint,
+        api_key=azure_api_key,
+        model_name=GPT4O_MODEL_NAME,
+        api_version=AZURE_OPENAI_API_VERSION_GPT4O,
+    )
     full_prompt = f"""Context Document:
 {extracted_text}
 
@@ -1725,13 +1869,6 @@ def save_uploaded_file_for_user(user_id: int, upload: UploadFile, file_bytes: by
     return str(file_path)
 
 
-def build_modal_client(endpoint_url: str, api_key: str | None) -> OpenAI:
-    base = endpoint_url.strip().rstrip("/")
-    if not base.endswith("/v1"):
-        base = base + "/v1"
-    return OpenAI(api_key=(api_key or "modal"), base_url=base)
-
-
 def parse_provider_output(raw: Any) -> tuple[str | None, dict[str, Any] | None]:
     if isinstance(raw, dict):
         return None, raw
@@ -1749,19 +1886,18 @@ def run_azure_text_task(
     temperature: float = 0,
     max_tokens: int | None = None,
 ) -> str:
-    client = build_azure_openai_client(endpoint, api_key, api_version=api_version)
-    kwargs: dict[str, Any] = {"temperature": temperature}
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
-    response = client.chat.completions.create(
-        model=model_name,
+    return call_azure_chat_completion(
+        model_name=model_name,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=api_version,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
         ],
-        **kwargs,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
-    return (response.choices[0].message.content or "").strip()
 
 
 def run_azure_ocr_generic(
@@ -1780,7 +1916,6 @@ def run_azure_ocr_generic(
         text = extract_text_gpt4o(file_bytes, filename).strip()
         images = []
 
-    client = build_azure_openai_client(endpoint, api_key, api_version=api_version)
     content: list[dict[str, Any]] = []
     if text:
         content.append({"type": "text", "text": text})
@@ -1793,38 +1928,51 @@ def run_azure_ocr_generic(
         )
 
     full_prompt = f"{prompt}\nExtract text from the document content below."
-    response = client.chat.completions.create(
-        model=model_name,
+    response_text = call_azure_chat_completion(
+        model_name=model_name,
+        endpoint=endpoint,
+        api_key=api_key,
+        api_version=api_version,
         messages=[
             {"role": "system", "content": "You are an OCR assistant."},
             {"role": "user", "content": [{"type": "text", "text": full_prompt}, *content]},
         ],
         temperature=0,
     )
-    return (response.choices[0].message.content or "").strip() or "(No text extracted)"
+    return response_text.strip() or "(No text extracted)"
 
 
 def run_hugging_face_task(
     *,
-    endpoint_url: str,
+    model_name: str,
+    endpoint_url: str | None,
     api_key: str | None,
     performance_type: str,
     prompt: str,
     input_text: str | None,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    if performance_type == "ocr":
-        raise OptionUnavailableError("This option is currently not available.")
-
-    headers = {}
+    headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    payload = {"inputs": f"{prompt}\n\n{input_text or ''}".strip()}
-    response = requests.post(endpoint_url, headers=headers, json=payload, timeout=60)
-    response.raise_for_status()
-    data = response.json()
+    final_prompt = build_text_task_prompt(performance_type, input_text or "", prompt)
+    data = post_json_request(
+        url=build_hugging_face_url(model_name, endpoint_url),
+        headers=headers,
+        payload={"inputs": final_prompt},
+        provider_name="Hugging Face",
+    )
     if isinstance(data, list) and data and isinstance(data[0], dict) and "generated_text" in data[0]:
-        return data[0]["generated_text"], data[0]
+        generated = data[0]["generated_text"]
+        if performance_type == "text_to_json":
+            return None, parse_json_from_response(generated)
+        if performance_type == "document_classification":
+            return parse_classification_from_response(generated), data[0]
+        return generated, data[0]
+    if isinstance(data, list) and data and isinstance(data[0], dict) and "summary_text" in data[0]:
+        return data[0]["summary_text"], data[0]
     if isinstance(data, dict):
+        if performance_type == "text_to_json":
+            return None, data
         return None, data
     return str(data), None
 
@@ -1876,7 +2024,18 @@ def execute_manager_test(
 
     if performance_type == "ocr" and not file_bytes:
         raise HTTPException(400, "File upload is required for OCR.")
-    if performance_type != "ocr" and not (input_text or prompt):
+    effective_input_text = (input_text or "").strip() or None
+    if file_bytes and filename and performance_type != "ocr":
+        effective_input_text = extract_clean_document_text(
+            file_bytes=file_bytes,
+            filename=filename,
+            provider=provider,
+            endpoint_url=endpoint,
+            api_key=key,
+            model_name=model_name,
+            api_version=version,
+        )
+    if performance_type != "ocr" and not (effective_input_text or prompt):
         raise HTTPException(400, "Text input or prompt is required.")
 
     if provider == "azure":
@@ -1890,27 +2049,23 @@ def execute_manager_test(
             azure_version = AZURE_OPENAI_API_VERSION_GPT4O
 
         if performance_type == "ocr":
-            if model_name == "GPT-4.1":
-                output_text = run_ocr_gpt41(file_bytes, filename or "upload.pdf", prompt, endpoint, key)
-            elif model_name == "GPT-4o-mini":
-                output_text = run_ocr_gpt4o(file_bytes, filename or "upload.pdf", prompt, endpoint, key)
-            else:
-                output_text = run_azure_ocr_generic(
-                    model_name=azure_model,
-                    endpoint=endpoint,
-                    api_key=key,
-                    api_version=azure_version,
-                    prompt=prompt,
-                    file_bytes=file_bytes or b"",
-                    filename=filename or "upload.pdf",
-                )
+            output_text = extract_clean_document_text(
+                file_bytes=file_bytes or b"",
+                filename=filename or "upload.pdf",
+                provider="azure",
+                endpoint_url=endpoint,
+                api_key=key,
+                model_name=azure_model,
+                api_version=azure_version,
+                ocr_prompt=prompt,
+            )
             return {"output_text": output_text, "output_json": None}
 
         if performance_type == "text_to_json":
             if model_name == "GPT-4.1":
-                output_json = call_azure_gpt41_text_to_json(input_text or "", prompt, endpoint, key)
+                output_json = call_azure_gpt41_text_to_json(effective_input_text or "", prompt, endpoint, key)
             elif model_name == "GPT-4o-mini":
-                output_json = call_azure_gpt4o_text_to_json(input_text or "", prompt, endpoint, key)
+                output_json = call_azure_gpt4o_text_to_json(effective_input_text or "", prompt, endpoint, key)
             else:
                 raw = run_azure_text_task(
                     model_name=azure_model,
@@ -1918,7 +2073,7 @@ def execute_manager_test(
                     api_key=key,
                     api_version=azure_version,
                     system="You are an AI that converts text into structured JSON.",
-                    user_content=f"{prompt}\n\nInput Text:\n{input_text or ''}\n\nReturn the output strictly in JSON format.",
+                    user_content=build_text_task_prompt("text_to_json", effective_input_text or "", prompt),
                     temperature=0,
                 )
                 output_json = parse_json_from_response(raw)
@@ -1926,9 +2081,9 @@ def execute_manager_test(
 
         if performance_type == "document_summarization":
             if model_name == "GPT-4.1":
-                output_text = call_azure_gpt41_summary(input_text or "", prompt, endpoint, key)
+                output_text = call_azure_gpt41_summary(effective_input_text or "", prompt, endpoint, key)
             elif model_name == "GPT-4o-mini":
-                output_text = call_azure_gpt4o_summary(input_text or "", prompt, endpoint, key)
+                output_text = call_azure_gpt4o_summary(effective_input_text or "", prompt, endpoint, key)
             else:
                 output_text = run_azure_text_task(
                     model_name=azure_model,
@@ -1936,7 +2091,7 @@ def execute_manager_test(
                     api_key=key,
                     api_version=azure_version,
                     system="You are an AI that summarizes documents.",
-                    user_content=f"{prompt}\n\nDocument Content:\n{input_text or ''}\n\nProvide a clear, concise summary.",
+                    user_content=build_text_task_prompt("document_summarization", effective_input_text or "", prompt),
                     temperature=0.3,
                     max_tokens=1500,
                 )
@@ -1944,19 +2099,19 @@ def execute_manager_test(
 
         if performance_type == "document_classification":
             if model_name == "GPT-4.1":
-                output_text = call_azure_gpt41_classification(input_text or "", prompt, endpoint, key)
+                output_text = call_azure_gpt41_classification(effective_input_text or "", prompt, endpoint, key)
             elif model_name == "GPT-4o-mini":
-                output_text = call_azure_gpt4o_classification(input_text or "", prompt, endpoint, key)
+                output_text = call_azure_gpt4o_classification(effective_input_text or "", prompt, endpoint, key)
             else:
-                output_text = run_azure_text_task(
+                output_text = parse_classification_from_response(run_azure_text_task(
                     model_name=azure_model,
                     endpoint=endpoint,
                     api_key=key,
                     api_version=azure_version,
                     system="You are an AI that classifies documents.",
-                    user_content=f"{prompt}\n\nDocument Content:\n{input_text or ''}\n\nReturn only the classification label or category.",
+                    user_content=build_text_task_prompt("document_classification", effective_input_text or "", prompt),
                     temperature=0,
-                )
+                ))
             return {"output_text": output_text, "output_json": None}
 
         if performance_type in {"chatbot", "text_generation"}:
@@ -1966,7 +2121,7 @@ def execute_manager_test(
                 api_key=key,
                 api_version=azure_version,
                 system="You are a helpful AI assistant.",
-                user_content=f"{prompt}\n\nUser Input:\n{input_text or ''}".strip(),
+                user_content=build_text_task_prompt(performance_type, effective_input_text or "", prompt),
                 temperature=0.3,
                 max_tokens=1500,
             )
@@ -1976,52 +2131,67 @@ def execute_manager_test(
         if not endpoint:
             raise HTTPException(400, "Modal endpoint URL is required.")
         if performance_type == "ocr":
-            if not filename or not filename.lower().endswith(".pdf"):
-                extracted_text = extract_text_gpt4o(file_bytes or b"", filename or "")
-                return {"output_text": extracted_text, "output_json": None}
-            results = extract_pdf_text_with_fallback(file_bytes or b"", endpoint, model_name, prompt)
-            return {"output_text": format_page_results(results), "output_json": None}
+            output_text = extract_clean_document_text(
+                file_bytes=file_bytes or b"",
+                filename=filename or "upload.pdf",
+                provider="modal",
+                endpoint_url=endpoint,
+                model_name=model_name,
+                ocr_prompt=prompt,
+            )
+            return {"output_text": output_text, "output_json": None}
 
         if performance_type == "text_to_json":
             return {
                 "output_text": None,
-                "output_json": call_modal_llm_text_to_json(input_text or "", prompt, endpoint, model_name),
+                "output_json": call_modal_llm_text_to_json(effective_input_text or "", prompt, endpoint, model_name),
             }
 
         if performance_type == "document_summarization":
             return {
-                "output_text": call_modal_summary(input_text or "", endpoint, prompt, model_name),
+                "output_text": call_modal_summary(effective_input_text or "", endpoint, prompt, model_name),
                 "output_json": None,
             }
 
         if performance_type == "document_classification":
             return {
-                "output_text": call_modal_classification(input_text or "", endpoint, prompt, model_name).strip(),
+                "output_text": call_modal_classification(effective_input_text or "", endpoint, prompt, model_name).strip(),
                 "output_json": None,
             }
 
         if performance_type in {"chatbot", "text_generation"}:
-            client = build_modal_client(endpoint, key)
-            response = client.chat.completions.create(
-                model=model_name,
+            output_text = call_openai_compatible_chat_completion(
+                endpoint_url=endpoint,
+                model_name=model_name,
                 messages=[
                     {"role": "system", "content": "You are a helpful AI assistant."},
-                    {"role": "user", "content": f"{prompt}\n\nUser Input:\n{input_text or ''}".strip()},
+                    {"role": "user", "content": build_text_task_prompt(performance_type, effective_input_text or "", prompt)},
                 ],
+                api_key=key,
+                provider_name="Modal",
                 max_tokens=1500,
                 temperature=0.3,
             )
-            return {"output_text": (response.choices[0].message.content or "").strip(), "output_json": None}
+            return {"output_text": output_text.strip(), "output_json": None}
 
     if provider == "huggingface":
-        if not endpoint:
-            raise HTTPException(400, "Hugging Face endpoint URL is required.")
+        if performance_type == "ocr":
+            output_text = extract_clean_document_text(
+                file_bytes=file_bytes or b"",
+                filename=filename or "upload.pdf",
+                provider="huggingface",
+                endpoint_url=endpoint,
+                model_name=model_name,
+                ocr_prompt=prompt,
+            )
+            return {"output_text": output_text, "output_json": None}
         output_text, output_json = run_hugging_face_task(
+            model_name=model_name,
             endpoint_url=endpoint,
             api_key=key,
             performance_type=performance_type,
             prompt=prompt,
-            input_text=input_text,
+            input_text=effective_input_text,
         )
         return {"output_text": output_text, "output_json": output_json}
 
@@ -2156,8 +2326,8 @@ async def create_issue_api(body: IssueCreateRequest, request: Request):
 
 @app.get("/api/history")
 async def history_api(request: Request):
-    user = require_authenticated_user(request)
-    return {"runs": list_user_test_runs(user["id"])}
+    require_authenticated_user(request)
+    return {"runs": list_test_runs()}
 
 
 @app.post("/api/execute")

@@ -321,17 +321,26 @@ def create_test_run(
     return run
 
 
-def list_user_test_runs(user_id: int) -> list[dict[str, Any]]:
+def list_test_runs(user_id: int | None = None) -> list[dict[str, Any]]:
     with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM test_runs
-            WHERE user_id = ?
-            ORDER BY created_at DESC
-            LIMIT 100
-            """,
-            (user_id,),
-        ).fetchall()
+        if user_id is None:
+            rows = conn.execute(
+                """
+                SELECT * FROM test_runs
+                ORDER BY created_at DESC
+                LIMIT 100
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM test_runs
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT 100
+                """,
+                (user_id,),
+            ).fetchall()
     results = []
     for row in rows:
         item = dict(row)

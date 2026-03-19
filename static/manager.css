@@ -602,6 +602,18 @@ body {
 
 .manager-checkbox input {
   accent-color: #9333ea;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+#newModelRunBtn {
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: start;
+  width: fit-content;
+  min-width: 120px;
+  padding: 8px 14px;
+  font-size: 13px;
 }
 
 .manager-unavailable {

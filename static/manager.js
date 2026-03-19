@@ -348,15 +348,14 @@ document.addEventListener('DOMContentLoaded', () => {
     primaryTestOptions.forEach((option) => {
       const label = document.createElement('label');
       label.className = 'manager-checkbox';
-      label.innerHTML = `<input type="checkbox" value="${option}" checked /> <span>${performanceLabel(option)}</span>`;
+      label.innerHTML = `<input type="radio" name="manager_test_option" value="${option}" /> <span>${performanceLabel(option)}</span>`;
       newModelCapabilities.appendChild(label);
     });
   }
 
   function getAdHocSelectedOptions() {
-    return Array.from(
-      newModelCapabilities.querySelectorAll('input[type="checkbox"]:checked')
-    ).map((input) => input.value);
+    const selectedInput = newModelCapabilities.querySelector('input[type="radio"]:checked');
+    return selectedInput ? [selectedInput.value] : [];
   }
 
   function buildAdHocModel(nameOverride = '') {
@@ -365,7 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
       model_key: '__adhoc__',
       name,
       provider: newModelProvider?.value || 'azure',
-      available_options: getAdHocSelectedOptions().length ? getAdHocSelectedOptions() : primaryTestOptions,
+      available_options: getAdHocSelectedOptions(),
       default_prompt: newModelPrompt?.value?.trim() || '',
       endpoint_url: newModelEndpoint?.value?.trim() || '',
       api_version: newModelApiVersion?.value?.trim() || '',
@@ -436,7 +435,7 @@ document.addEventListener('DOMContentLoaded', () => {
     options.forEach((option) => {
       const label = document.createElement('label');
       label.className = 'manager-checkbox';
-      label.innerHTML = `<input type="checkbox" value="${option}" checked /> <span>${performanceLabel(option)}</span>`;
+      label.innerHTML = `<input type="radio" name="manager_test_option" value="${option}" /> <span>${performanceLabel(option)}</span>`;
       newModelCapabilities.appendChild(label);
     });
 
